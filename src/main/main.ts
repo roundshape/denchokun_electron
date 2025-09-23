@@ -13,40 +13,62 @@ let mainWindow: BrowserWindow | null = null;
 let setupWindow: BrowserWindow | null = null;
 
 function createWindow() {
+  // ウィンドウサイズを強制的にリセット
+  store.delete('mainWindow');
+  
   const windowState = store.get('mainWindow', {
     x: 100,
     y: 100,
-    width: 482,
-    height: 436
+    width: 800,
+    height: 800
   }) as any;
 
   mainWindow = new BrowserWindow({
-    x: windowState.x,
-    y: windowState.y,
-    width: windowState.width,
-    height: windowState.height,
-    minWidth: 482,    // 最小幅: 482px
-    minHeight: 436,   // 最小高さ: 436px
+    x: 100,
+    y: 100,
+    width: 750,       // 初期幅: 750px
+    height: 600,      // 初期高さ: 600px
+    minWidth: 750,    // 最小幅: 750px
+    minHeight: 600,   // 最小高さ: 600px
+    maxHeight: 600,   // 最大高さ: 600px（縦方向固定）
+    resizable: true,  // リサイズ有効
+    show: false,      // 初期は非表示
     title: '電帳君',
     icon: path.join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, '../preload/preload.js')
+      preload: path.join(__dirname, '../preload/preload.js'),
+      zoomFactor: 1.0,
+      webSecurity: false  // ファイルパス取得のため一時的に無効
     }
   });
 
-  mainWindow.on('close', () => {
-    const bounds = mainWindow!.getBounds();
-    store.set('mainWindow', bounds);
-  });
+  // mainWindow.on('close', () => {
+  //   const bounds = mainWindow!.getBounds();
+  //   store.set('mainWindow', bounds);
+  // });
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    // mainWindow.webContents.openDevTools(); // 自動で開発者ツールを開かない
+    mainWindow.webContents.openDevTools(); // 開発者ツールを自動で開く
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
+
+  // コンテンツが読み込まれた後にウィンドウを表示
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow) {
+      // 強制的に750x600に設定して表示
+      mainWindow.setBounds({
+        x: 100,
+        y: 100,
+        width: 750,
+        height: 600
+      });
+      mainWindow.show();
+    }
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -114,6 +136,12 @@ function createMenu() {
             createSetupWindow();
           }
         },
+        {
+          label: '環境設定',
+          click: () => {
+            mainWindow?.webContents.send('menu-environment');
+          }
+        },
         { type: 'separator' },
         {
           label: '終了',
@@ -137,7 +165,11 @@ function createMenu() {
       label: '表示',
       submenu: [
         { label: 'リロード', role: 'reload' },
-        { label: '開発者ツール', role: 'toggleDevTools' },
+        { 
+          label: '開発者ツール', 
+          role: 'toggleDevTools',
+          accelerator: 'F12'
+        },
         { type: 'separator' },
         { label: 'ズームイン', role: 'zoomIn' },
         { label: 'ズームアウト', role: 'zoomOut' },
@@ -264,6 +296,10 @@ ipcMain.handle('delete-store-value', (event, key) => {
 
 // App Events
 app.whenReady().then(() => {
+  // DPIスケーリングを無効にして物理ピクセルで制御
+  app.commandLine.appendSwitch('high-dpi-support', 'true');
+  app.commandLine.appendSwitch('force-device-scale-factor', '1');
+  
   createWindow();
   createMenu();
 
@@ -330,11 +366,25 @@ ipcMain.handle('fs-unlink', async (event, filePath: string) => {
   return fs.unlink(filePath);
 });
 
+// ファイルパス取得のためのIPC
+ipcMain.handle('get-file-path', async (event, fileName: string) => {
+  // TODO: 実際のファイルパス解決ロジックを実装
+  // 現在は仮の実装
+  return `C:\\Users\\motoi\\Downloads\\${fileName}`;
+});
+
 // Initialize app settings if first run
 if (!store.has('initialized')) {
   store.set('settings', {
     baseFolder: app.getPath('documents'),
     workingPeriod: '',
+    apiServer: {
+      url: 'http://localhost:8080',
+      currentPeriod: ''
+    },
+    previewServer: {
+      url: 'http://localhost:8081'
+    },
     mbsLicense: {
       name: '',
       product: '',

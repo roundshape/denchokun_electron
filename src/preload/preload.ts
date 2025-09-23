@@ -37,12 +37,50 @@ const api = {
     readdir: (path: string) => ipcRenderer.invoke('fs-readdir', path),
     stat: (path: string) => ipcRenderer.invoke('fs-stat', path),
     copyFile: (src: string, dest: string) => ipcRenderer.invoke('fs-copy-file', src, dest),
-    unlink: (path: string) => ipcRenderer.invoke('fs-unlink', path)
+    unlink: (path: string) => ipcRenderer.invoke('fs-unlink', path),
+    getFilePath: (fileName: string) => ipcRenderer.invoke('get-file-path', fileName)
   },
 
   // Crypto operations
   crypto: {
     hash: (data: string, algorithm?: string) => ipcRenderer.invoke('crypto-hash', data, algorithm)
+  },
+
+  // API Client operations
+  api: {
+    // 設定関連
+    getConfig: () => ipcRenderer.invoke('api-config-get'),
+    setConfig: (config: any) => ipcRenderer.invoke('api-config-set', config),
+    
+    // 汎用APIリクエスト
+    request: (options: any) => ipcRenderer.invoke('api-request', options),
+    
+    // ヘルスチェック
+    healthCheck: (server: 'denchokun' | 'preview') => ipcRenderer.invoke('api-health-check', server),
+    
+    // 取引データ関連
+    transactions: {
+      list: (periodId?: string) => ipcRenderer.invoke('api-transactions-list', periodId),
+      create: (data: any) => ipcRenderer.invoke('api-transactions-create', data),
+      update: (id: number, data: any) => ipcRenderer.invoke('api-transactions-update', id, data),
+      delete: (id: number) => ipcRenderer.invoke('api-transactions-delete', id)
+    },
+    
+    // 期間管理関連
+    periods: {
+      list: () => ipcRenderer.invoke('api-periods-list'),
+      create: (data: any) => ipcRenderer.invoke('api-periods-create', data)
+    },
+    
+    // マスター関連
+    partners: {
+      list: () => ipcRenderer.invoke('api-partners-list'),
+      create: (data: any) => ipcRenderer.invoke('api-partners-create', data)
+    },
+    
+    doctypes: {
+      list: () => ipcRenderer.invoke('api-doctypes-list')
+    }
   },
 
   // Menu event listeners
@@ -55,7 +93,8 @@ const api = {
       'menu-manage-periods',
       'menu-partners-master',
       'menu-doctype-master',
-      'menu-about'
+      'menu-about',
+      'menu-environment'
     ];
 
     events.forEach(event => {
@@ -73,6 +112,7 @@ const api = {
     ipcRenderer.removeAllListeners('menu-partners-master');
     ipcRenderer.removeAllListeners('menu-doctype-master');
     ipcRenderer.removeAllListeners('menu-about');
+    ipcRenderer.removeAllListeners('menu-environment');
   }
 };
 

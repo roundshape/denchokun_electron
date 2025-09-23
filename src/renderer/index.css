@@ -7,6 +7,46 @@ body {
   @apply bg-gray-50 text-gray-900;
 }
 
+/* スクロールバーを完全非表示 */
+.no-scrollbar {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Webkit */
+}
+
+/* PDFプレビュー用スタイル */
+.pdf-preview iframe {
+  scrollbar-width: none !important;
+  -ms-overflow-style: none !important;
+}
+
+.pdf-preview iframe::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* iframe内のスクロールバーを強制非表示 */
+.pdf-preview iframe {
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+}
+
+/* より強力なスクロールバー非表示 */
+.pdf-preview {
+  overflow: hidden !important;
+}
+
+.pdf-preview iframe {
+  margin-right: -20px !important; /* 右側スクロールバー分をカット */
+  margin-bottom: -20px !important; /* 下側スクロールバー分をカット */
+  width: calc(100% + 20px) !important;
+  height: calc(100% + 20px) !important;
+}
+
 .btn-primary {
   @apply px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors;
 }

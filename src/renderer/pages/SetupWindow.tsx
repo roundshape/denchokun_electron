@@ -3,6 +3,13 @@ import { useNavigate } from 'react-router-dom';
 
 interface Settings {
   baseFolder: string;
+  apiServer?: {
+    url: string;
+    currentPeriod: string;
+  };
+  previewServer?: {
+    url: string;
+  };
   mbsLicense?: {
     name: string;
     product: string;
@@ -15,6 +22,13 @@ const SetupWindow: React.FC = () => {
   const navigate = useNavigate();
   const [settings, setSettings] = useState<Settings>({
     baseFolder: '',
+    apiServer: {
+      url: 'http://localhost:8080',
+      currentPeriod: ''
+    },
+    previewServer: {
+      url: 'http://localhost:8081'
+    },
     mbsLicense: {
       name: '',
       product: '',
@@ -52,7 +66,26 @@ const SetupWindow: React.FC = () => {
       return;
     }
 
+    if (!settings.apiServer?.url) {
+      await window.electronAPI.showMessageBox({
+        type: 'warning',
+        title: '設定エラー',
+        message: 'APIサーバーURLを入力してください。',
+        buttons: ['OK']
+      });
+      return;
+    }
+
+    // 設定を保存
     await window.electronAPI.store.set('settings', settings);
+    
+    // APIクライアントの設定も更新
+    await window.electronAPI.api.setConfig({
+      denchokunServerUrl: settings.apiServer.url,
+      previewServerUrl: settings.previewServer?.url || 'http://localhost:8081',
+      currentPeriod: settings.apiServer.currentPeriod
+    });
+
     await window.electronAPI.showMessageBox({
       type: 'info',
       title: '設定完了',
@@ -64,6 +97,52 @@ const SetupWindow: React.FC = () => {
 
   const handleCancel = () => {
     navigate('/');
+  };
+
+  const handleTestConnection = async () => {
+    if (!settings.apiServer?.url) {
+      await window.electronAPI.showMessageBox({
+        type: 'warning',
+        title: '接続テストエラー',
+        message: 'APIサーバーURLを入力してください。',
+        buttons: ['OK']
+      });
+      return;
+    }
+
+    try {
+      // 一時的にAPIクライアントの設定を更新してテスト
+      await window.electronAPI.api.setConfig({
+        denchokunServerUrl: settings.apiServer.url,
+        previewServerUrl: settings.previewServer?.url || 'http://localhost:8081',
+        currentPeriod: settings.apiServer.currentPeriod
+      });
+
+      const result = await window.electronAPI.api.healthCheck('denchokun');
+      
+      if (result.status === 'ok') {
+        await window.electronAPI.showMessageBox({
+          type: 'info',
+          title: '接続テスト成功',
+          message: 'APIサーバーに正常に接続できました。',
+          buttons: ['OK']
+        });
+      } else {
+        await window.electronAPI.showMessageBox({
+          type: 'error',
+          title: '接続テスト失敗',
+          message: `APIサーバーに接続できませんでした。\nエラー: ${result.error}`,
+          buttons: ['OK']
+        });
+      }
+    } catch (error) {
+      await window.electronAPI.showMessageBox({
+        type: 'error',
+        title: '接続テスト失敗',
+        message: `APIサーバーに接続できませんでした。\nエラー: ${error}`,
+        buttons: ['OK']
+      });
+    }
   };
 
   return (
@@ -97,6 +176,86 @@ const SetupWindow: React.FC = () => {
             <p className="mt-1 text-sm text-gray-500">
               取引データと関連ファイルが保存されるフォルダです。
             </p>
+          </div>
+
+          {/* API Server Settings */}
+          <div>
+            <h3 className="text-lg font-medium text-gray-900 mb-3">
+              APIサーバー設定
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="form-label">
+                  電帳君サーバーURL
+                </label>
+                <div className="flex space-x-2">
+                  <input
+                    type="text"
+                    value={settings.apiServer?.url || ''}
+                    onChange={(e) => setSettings(prev => ({
+                      ...prev,
+                      apiServer: {
+                        ...prev.apiServer!,
+                        url: e.target.value
+                      }
+                    }))}
+                    className="form-input flex-1"
+                    placeholder="http://localhost:8080"
+                  />
+                  <button
+                    onClick={handleTestConnection}
+                    className="btn-secondary whitespace-nowrap"
+                  >
+                    接続テスト
+                  </button>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  電帳君APIサーバーのURLを指定してください。
+                </p>
+              </div>
+              <div>
+                <label className="form-label">
+                  現在の期間ID
+                </label>
+                <input
+                  type="text"
+                  value={settings.apiServer?.currentPeriod || ''}
+                  onChange={(e) => setSettings(prev => ({
+                    ...prev,
+                    apiServer: {
+                      ...prev.apiServer!,
+                      currentPeriod: e.target.value
+                    }
+                  }))}
+                  className="form-input"
+                  placeholder="例: 2024-01"
+                />
+                <p className="mt-1 text-sm text-gray-500">
+                  現在作業中の期間IDを指定してください（オプション）。
+                </p>
+              </div>
+              <div>
+                <label className="form-label">
+                  プレビューサーバーURL
+                </label>
+                <input
+                  type="text"
+                  value={settings.previewServer?.url || ''}
+                  onChange={(e) => setSettings(prev => ({
+                    ...prev,
+                    previewServer: {
+                      ...prev.previewServer!,
+                      url: e.target.value
+                    }
+                  }))}
+                  className="form-input"
+                  placeholder="http://localhost:8081"
+                />
+                <p className="mt-1 text-sm text-gray-500">
+                  プレビュー生成サーバーのURLを指定してください。
+                </p>
+              </div>
+            </div>
           </div>
 
           {/* MBS License (Optional for now) */}
