@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 interface DealPeriod {
-  id?: number;
   name: string;
-  start_date: string;
-  end_date: string;
+  fromDate: string;
+  toDate: string;
   created?: string;
-  modified?: string;
+  updated?: string;
 }
 
 const DealPeriodWindow: React.FC = () => {
@@ -17,22 +16,45 @@ const DealPeriodWindow: React.FC = () => {
   const [editingPeriod, setEditingPeriod] = useState<DealPeriod | null>(null);
   const [formData, setFormData] = useState<DealPeriod>({
     name: '',
-    start_date: '',
-    end_date: ''
+    fromDate: '',
+    toDate: ''
   });
 
   useEffect(() => {
+    // 期間管理画面を開いた時は最新データを取得
     loadPeriods();
   }, []);
 
+  // API通信関数
+  const callAPI = async (endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: any) => {
+    try {
+      if (typeof window !== 'undefined' && window.electronAPI) {
+        const result = await window.electronAPI.api.request({
+          server: 'denchokun',
+          endpoint,
+          method,
+          data
+        });
+        return result;
+      }
+    } catch (error) {
+      console.error('API通信エラー:', error);
+      throw error;
+    }
+  };
+
   const loadPeriods = async () => {
     try {
-      const result = await window.electronAPI.db.all(
-        'SELECT * FROM deal_periods ORDER BY start_date DESC'
-      );
-      setPeriods(result);
+      const result = await callAPI('/v1/api/periods', 'GET');
+      if (result.success && result.periods && Array.isArray(result.periods)) {
+        setPeriods(result.periods);
+      } else {
+        console.warn('期間データが取得できませんでした:', result);
+        setPeriods([]);
+      }
     } catch (error) {
-      console.error('Failed to load periods:', error);
+      console.error('期間読み込みエラー:', error);
+      setPeriods([]);
     }
   };
 
@@ -40,8 +62,8 @@ const DealPeriodWindow: React.FC = () => {
     setEditingPeriod(null);
     setFormData({
       name: '',
-      start_date: '',
-      end_date: ''
+      fromDate: '',
+      toDate: ''
     });
     setShowForm(true);
   };
@@ -50,8 +72,8 @@ const DealPeriodWindow: React.FC = () => {
     setEditingPeriod(period);
     setFormData({
       name: period.name,
-      start_date: period.start_date,
-      end_date: period.end_date
+      fromDate: period.fromDate === '未設定' ? '' : period.fromDate,
+      toDate: period.toDate === '未設定' ? '' : period.toDate
     });
     setShowForm(true);
   };
@@ -60,7 +82,7 @@ const DealPeriodWindow: React.FC = () => {
     const result = await window.electronAPI.showMessageBox({
       type: 'question',
       title: '削除確認',
-      message: `期間「${period.name}」を削除しますか？`,
+      message: `期間「${period.name}」を削除しますか？\n\n注意：\n・取引データが存在する期間は削除できません\n・削除すると期間フォルダごと完全に削除されます`,
       buttons: ['キャンセル', '削除'],
       defaultId: 0,
       cancelId: 0
@@ -68,17 +90,48 @@ const DealPeriodWindow: React.FC = () => {
 
     if (result.response === 1) {
       try {
-        await window.electronAPI.db.run(
-          'DELETE FROM deal_periods WHERE id = ?',
-          [period.id]
-        );
-        loadPeriods();
+        const deleteResult = await callAPI(`/v1/api/periods?period=${encodeURIComponent(period.name)}`, 'DELETE');
+        if (deleteResult.success) {
+          await window.electronAPI.showMessageBox({
+            type: 'info',
+            title: '削除完了',
+            message: '期間を削除しました。',
+            buttons: ['OK']
+          });
+          loadPeriods();
+        } else {
+          // APIのエラータイプに応じて適切なメッセージを表示
+          let errorMessage = '期間の削除に失敗しました。';
+          let errorTitle = 'エラー';
+          
+          if (deleteResult.error === 'period_has_deals') {
+            errorTitle = '削除できません';
+            errorMessage = `期間「${period.name}」には取引データが存在するため削除できません。\n先に取引データを削除するか、別の期間に移動してください。`;
+          } else if (deleteResult.error === 'period_not_found') {
+            errorTitle = '期間が見つかりません';
+            errorMessage = `期間「${period.name}」が見つかりません。\n既に削除されている可能性があります。`;
+          } else {
+            errorMessage = deleteResult.message || '期間の削除に失敗しました。';
+          }
+          
+          await window.electronAPI.showMessageBox({
+            type: 'warning',
+            title: errorTitle,
+            message: errorMessage,
+            buttons: ['OK']
+          });
+          
+          // 期間が見つからない場合は一覧を更新
+          if (deleteResult.error === 'period_not_found') {
+            loadPeriods();
+          }
+        }
       } catch (error) {
         console.error('Failed to delete period:', error);
         await window.electronAPI.showMessageBox({
           type: 'error',
           title: 'エラー',
-          message: '期間の削除に失敗しました。',
+          message: '期間の削除でエラーが発生しました。\nサーバーとの通信を確認してください。',
           buttons: ['OK']
         });
       }
@@ -86,17 +139,18 @@ const DealPeriodWindow: React.FC = () => {
   };
 
   const handleSavePeriod = async () => {
-    if (!formData.name || !formData.start_date || !formData.end_date) {
+    if (!formData.name) {
       await window.electronAPI.showMessageBox({
         type: 'warning',
         title: '入力エラー',
-        message: 'すべての項目を入力してください。',
+        message: '期間名を入力してください。',
         buttons: ['OK']
       });
       return;
     }
 
-    if (formData.start_date > formData.end_date) {
+    // 開始日・終了日の両方が入力されている場合のみ日付順序をチェック
+    if (formData.fromDate && formData.toDate && formData.fromDate > formData.toDate) {
       await window.electronAPI.showMessageBox({
         type: 'warning',
         title: '入力エラー',
@@ -107,28 +161,56 @@ const DealPeriodWindow: React.FC = () => {
     }
 
     try {
+      // 空の日付は「未設定」として送信
+      const requestData = {
+        name: formData.name,
+        fromDate: formData.fromDate || '未設定',
+        toDate: formData.toDate || '未設定'
+      };
+
+      let result;
       if (editingPeriod) {
-        await window.electronAPI.db.run(
-          `UPDATE deal_periods
-           SET name = ?, start_date = ?, end_date = ?, modified = datetime('now', 'localtime')
-           WHERE id = ?`,
-          [formData.name, formData.start_date, formData.end_date, editingPeriod.id]
-        );
+        // 編集の場合：名前が変更されているかチェック
+        if (editingPeriod.name !== formData.name) {
+          // 期間名を変更する場合
+          result = await callAPI('/v1/api/periods/name', 'PUT', {
+            oldName: editingPeriod.name,
+            newName: formData.name
+          });
+          
+          if (!result.success) {
+            throw new Error(result.message || '期間名の変更に失敗しました');
+          }
+        }
+        
+        // 日付を更新する場合（期間名変更後は新しい名前を使用）
+        result = await callAPI(`/v1/api/periods/dates?period=${encodeURIComponent(formData.name)}`, 'PUT', {
+          fromDate: requestData.fromDate,
+          toDate: requestData.toDate
+        });
       } else {
-        await window.electronAPI.db.run(
-          `INSERT INTO deal_periods (name, start_date, end_date)
-           VALUES (?, ?, ?)`,
-          [formData.name, formData.start_date, formData.end_date]
-        );
+        // 新規作成の場合（POST）
+        result = await callAPI('/v1/api/periods', 'POST', requestData);
       }
-      setShowForm(false);
-      loadPeriods();
+
+      if (result.success) {
+        await window.electronAPI.showMessageBox({
+          type: 'info',
+          title: '保存完了',
+          message: editingPeriod ? '期間を更新しました。' : '期間を作成しました。',
+          buttons: ['OK']
+        });
+        setShowForm(false);
+        loadPeriods();
+      } else {
+        throw new Error(result.message || '保存に失敗しました');
+      }
     } catch (error) {
       console.error('Failed to save period:', error);
       await window.electronAPI.showMessageBox({
         type: 'error',
         title: 'エラー',
-        message: '期間の保存に失敗しました。',
+        message: `期間の保存に失敗しました。\n${error instanceof Error ? error.message : '不明なエラー'}`,
         buttons: ['OK']
       });
     }
@@ -178,21 +260,23 @@ const DealPeriodWindow: React.FC = () => {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="form-label">開始日</label>
+                  <label className="form-label">開始日 <span className="text-sm text-gray-500">(省略可能)</span></label>
                   <input
                     type="date"
-                    value={formData.start_date}
-                    onChange={(e) => setFormData({ ...formData, start_date: e.target.value })}
+                    value={formData.fromDate}
+                    onChange={(e) => setFormData({ ...formData, fromDate: e.target.value })}
                     className="form-input"
+                    title="未入力の場合は「未設定」として保存されます"
                   />
                 </div>
                 <div>
-                  <label className="form-label">終了日</label>
+                  <label className="form-label">終了日 <span className="text-sm text-gray-500">(省略可能)</span></label>
                   <input
                     type="date"
-                    value={formData.end_date}
-                    onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
+                    value={formData.toDate}
+                    onChange={(e) => setFormData({ ...formData, toDate: e.target.value })}
                     className="form-input"
+                    title="未入力の場合は「未設定」として保存されます"
                   />
                 </div>
               </div>
@@ -220,12 +304,12 @@ const DealPeriodWindow: React.FC = () => {
               </div>
             ) : (
               periods.map(period => (
-                <div key={period.id} className="card">
+                <div key={period.name} className="card">
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="text-lg font-semibold">{period.name}</h3>
                       <p className="text-sm text-gray-600">
-                        {period.start_date} ～ {period.end_date}
+                        {period.fromDate || '未設定'} ～ {period.toDate || '未設定'}
                       </p>
                     </div>
                     <div className="flex space-x-2">

@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron';
 import * as path from 'path';
+import { spawn } from 'child_process';
 import ApiClient from './api-client';
 const Store = require('electron-store');
 
@@ -40,7 +41,8 @@ function createWindow() {
       contextIsolation: true,
       preload: path.join(__dirname, '../preload/preload.js'),
       zoomFactor: 1.0,
-      webSecurity: false  // ファイルパス取得のため一時的に無効
+      webSecurity: true,  // セキュリティを有効化
+      allowRunningInsecureContent: false
     }
   });
 
@@ -51,7 +53,8 @@ function createWindow() {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools(); // 開発者ツールを自動で開く
+    // 開発者ツールは手動で開く（F12キー）
+    // mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
@@ -364,6 +367,159 @@ ipcMain.handle('fs-copy-file', async (event, src: string, dest: string) => {
 ipcMain.handle('fs-unlink', async (event, filePath: string) => {
   const fs = await import('fs/promises');
   return fs.unlink(filePath);
+});
+
+// WinShellPreview DLL integration
+ipcMain.handle('get-file-preview', async (event, filePath: string, outputPath?: string) => {
+  return new Promise((resolve, reject) => {
+    try {
+      // TestApp.exeのパスを取得
+      const resourcesPath = isDev 
+        ? path.join(__dirname, '../../resources')
+        : path.join(process.resourcesPath, 'resources');
+      
+      const testAppPath = path.join(resourcesPath, 'TestApp.exe');
+      
+      // 出力パスが指定されていない場合、一時ファイルを生成
+      const finalOutputPath = outputPath || path.join(app.getPath('temp'), `preview_${Date.now()}.png`);
+      
+      console.log('TestApp path:', testAppPath);
+      console.log('Input file:', filePath);
+      console.log('Output file:', finalOutputPath);
+      
+      // TestApp.exe を実行してプレビューを生成
+      const child = spawn(testAppPath, [filePath, finalOutputPath, '256'], {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve({
+            success: true,
+            outputPath: finalOutputPath,
+            message: stdout
+          });
+        } else {
+          reject({
+            success: false,
+            error: stderr || `Process exited with code ${code}`,
+            code
+          });
+        }
+      });
+      
+      child.on('error', (error) => {
+        reject({
+          success: false,
+          error: error.message
+        });
+      });
+      
+    } catch (error) {
+      reject({
+        success: false,
+        error: (error as Error).message
+      });
+    }
+  });
+});
+
+// プレビューファイルをBase64として取得
+ipcMain.handle('get-preview-base64', async (event, filePath: string) => {
+  try {
+    // まずプレビューを生成
+    const previewResult = await new Promise((resolve, reject) => {
+      // TestApp.exeのパスを取得
+      const resourcesPath = isDev 
+        ? path.join(__dirname, '../../resources')
+        : path.join(process.resourcesPath, 'resources');
+      
+      const testAppPath = path.join(resourcesPath, 'TestApp.exe');
+      
+      // 一時ファイルを生成
+      const tempOutputPath = path.join(app.getPath('temp'), `preview_${Date.now()}.png`);
+      
+      console.log('TestApp path:', testAppPath);
+      console.log('Input file:', filePath);
+      console.log('Output file:', tempOutputPath);
+      
+      // TestApp.exe を実行してプレビューを生成
+      const child = spawn(testAppPath, [filePath, tempOutputPath, '256'], {
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+      
+      let stdout = '';
+      let stderr = '';
+      
+      child.stdout?.on('data', (data) => {
+        stdout += data.toString();
+      });
+      
+      child.stderr?.on('data', (data) => {
+        stderr += data.toString();
+      });
+      
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve({
+            success: true,
+            outputPath: tempOutputPath,
+            message: stdout
+          });
+        } else {
+          reject({
+            success: false,
+            error: stderr || `Process exited with code ${code}`,
+            code
+          });
+        }
+      });
+      
+      child.on('error', (error) => {
+        reject({
+          success: false,
+          error: error.message
+        });
+      });
+    }) as any;
+    
+    if (previewResult.success) {
+      const fs = await import('fs/promises');
+      const imageBuffer = await fs.readFile(previewResult.outputPath);
+      const base64 = imageBuffer.toString('base64');
+      
+      // 一時ファイルを削除
+      try {
+        await fs.unlink(previewResult.outputPath);
+      } catch (cleanupError) {
+        console.warn('Failed to cleanup temp file:', cleanupError);
+      }
+      
+      return {
+        success: true,
+        base64: `data:image/png;base64,${base64}`,
+        originalPath: filePath
+      };
+    } else {
+      throw new Error(previewResult.error);
+    }
+  } catch (error) {
+    return {
+      success: false,
+      error: (error as Error).message
+    };
+  }
 });
 
 // ファイルパス取得のためのIPC

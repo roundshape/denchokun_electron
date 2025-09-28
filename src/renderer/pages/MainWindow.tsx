@@ -40,8 +40,8 @@ const MainWindow: React.FC = () => {
     const initializeApp = async () => {
       await loadApiServerUrl();
       await loadInputHistory();
-    checkInitialSetup();
-      await loadPeriods();
+      checkInitialSetup();
+      await loadPeriods(); // メイン画面では起動時に期間データが必要
     };
     
     initializeApp();
@@ -149,7 +149,8 @@ const MainWindow: React.FC = () => {
       // APIから期間一覧を取得
       const result = await callAPI('/v1/api/periods', 'GET');
       
-      if (result.success && result.periods) {
+      
+      if (result.success && result.periods && Array.isArray(result.periods)) {
         setPeriods(result.periods);
         // 最初の期間を選択状態にする
         if (result.periods.length > 0 && !selectedPeriod) {
@@ -157,26 +158,18 @@ const MainWindow: React.FC = () => {
         }
         addMessage(`${result.periods.length}個の期間を取得しました`);
       } else {
-        console.error('期間データの取得に失敗:', result);
-        addMessage('期間データの取得に失敗しました');
-        // フォールバック: デフォルトデータを使用
-      setPeriods([
-          { name: '2024-01', fromDate: '2024-01-01', toDate: '2024-01-31' },
-          { name: '2024-02', fromDate: '2024-02-01', toDate: '2024-02-29' },
-          { name: '2024-03', fromDate: '2024-03-01', toDate: '2024-03-31' }
-        ]);
-        setSelectedPeriod('2024-01');
+        console.warn('期間データが取得できませんでした:', result);
+        addMessage('期間データが取得できませんでした。APIサーバーの接続を確認してください。');
+        // 期間データなしの状態を維持
+        setPeriods([]);
+        setSelectedPeriod('');
       }
     } catch (error) {
       console.error('期間読み込みエラー:', error);
-      addMessage('期間データの読み込みエラーが発生しました');
-      // エラー時のフォールバック
-      setPeriods([
-        { name: '2024-01', fromDate: '2024-01-01', toDate: '2024-01-31' },
-        { name: '2024-02', fromDate: '2024-02-01', toDate: '2024-02-29' },
-        { name: '2024-03', fromDate: '2024-03-01', toDate: '2024-03-31' }
-      ]);
-      setSelectedPeriod('2024-01');
+      addMessage('期間データの読み込みでエラーが発生しました。APIサーバーの接続を確認してください。');
+      // エラー時も期間データなしの状態を維持
+      setPeriods([]);
+      setSelectedPeriod('');
     }
   };
 
@@ -224,40 +217,16 @@ const MainWindow: React.FC = () => {
         fileInfo.path = `[ブラウザ] ${file.name}`;
       }
       
-      console.log('Final file info:', fileInfo);
       
-      // プレビュー生成
-      if (file.type.startsWith('image/')) {
+      // WinShellPreviewを使用してプレビュー生成
+      if (fileInfo.path && (fileInfo.path.includes('\\') || fileInfo.path.includes('/'))) {
         try {
-          const reader = new FileReader();
-          const preview = await new Promise<string>((resolve, reject) => {
-            reader.onload = (e) => resolve(e.target?.result as string);
-            reader.onerror = (e) => reject(e);
-            reader.readAsDataURL(file);
-          });
-          fileInfo.preview = preview;
-          console.log('Image preview generated for:', file.name);
+          const previewResult = await window.electronAPI.preview.getPreviewBase64(fileInfo.path);
+          if (previewResult.success) {
+            fileInfo.preview = previewResult.base64;
+          }
         } catch (error) {
-          console.error('画像プレビュー生成エラー:', error);
-        }
-      } else if (file.type === 'application/pdf') {
-        try {
-          // PDFファイルの場合、ブラウザのblob URLを生成
-          const reader = new FileReader();
-          const preview = await new Promise<string>((resolve, reject) => {
-            reader.onload = (e) => {
-              const arrayBuffer = e.target?.result as ArrayBuffer;
-              const blob = new Blob([arrayBuffer], { type: 'application/pdf' });
-              const blobUrl = URL.createObjectURL(blob);
-              resolve(blobUrl);
-            };
-            reader.onerror = (e) => reject(e);
-            reader.readAsArrayBuffer(file);
-          });
-          fileInfo.preview = preview;
-          console.log('PDF preview generated for:', file.name);
-        } catch (error) {
-          console.error('PDFプレビュー生成エラー:', error);
+          console.error('WinShellPreviewエラー:', error);
         }
       }
       
@@ -306,21 +275,14 @@ const MainWindow: React.FC = () => {
               preview: undefined as string | undefined
             };
             
-            // プレビュー生成
-            if (fileInfo.type.startsWith('image/')) {
-              try {
-                // 画像ファイルのプレビュー
-                fileInfo.preview = `file://${filePath}`;
-              } catch (error) {
-                console.error('画像プレビュー生成エラー:', error);
+            // WinShellPreviewを使用してプレビュー生成
+            try {
+              const previewResult = await window.electronAPI.preview.getPreviewBase64(filePath);
+              if (previewResult.success) {
+                fileInfo.preview = previewResult.base64;
               }
-            } else if (fileInfo.type === 'application/pdf') {
-              try {
-                // PDFファイルのプレビュー（PDF.js使用、ツールバー非表示）
-                fileInfo.preview = `file://${filePath}`;
-              } catch (error) {
-                console.error('PDFプレビュー生成エラー:', error);
-              }
+            } catch (error) {
+              console.error('WinShellPreviewエラー:', error);
             }
             
             return fileInfo;
@@ -426,8 +388,6 @@ const MainWindow: React.FC = () => {
   const processFileForUpload = async (file: {name: string, path: string, size: number, type: string, preview?: string, fileObject?: File}) => {
     try {
       const maxSizeForBase64 = 10 * 1024 * 1024; // 10MB
-      let base64Data = '';
-      let fileId = '';
       
       // APIリクエスト用のファイル名生成（取引NOはサーバー側で生成）
       const timestamp = Date.now();
@@ -448,92 +408,26 @@ const MainWindow: React.FC = () => {
               type: file.type
             });
             
-            fileId = uploadResult.fileId || uploadResult.id;
+            const fileId = uploadResult.fileId || uploadResult.id;
             addMessage(`ファイルアップロード完了 (ID: ${fileId})`);
+            
+            return {
+              name: file.name,
+              path: apiFileName,
+              size: file.size,
+              fileId: fileId
+            };
           } catch (error) {
             console.error('大容量ファイルアップロードエラー:', error);
             throw new Error('ファイルアップロードに失敗しました');
           }
         }
-        
-        return {
-          name: file.name,
-          path: apiFileName,
-          size: file.size,
-          fileId: fileId, // 大容量ファイルの場合はfileIdを返す
-          base64Data: null // 大容量ファイルの場合はBase64なし
-        };
       } else {
-        // 10MB未満の場合：Base64エンコードして送信
-        console.log('ファイル処理開始:', { fileName: file.name, filePath: file.path, size: file.size });
-        
-        if (typeof window !== 'undefined' && window.electronAPI) {
-          // Electron環境：ファイルシステムから読み込み
-          if (file.path.includes('\\') || file.path.includes('/')) {
-            try {
-              console.log('フルパスでファイル読み込み試行:', file.path);
-              
-              // FileReaderを使用してファイル本体を読み込み
-              const response = await fetch(`file://${file.path}`);
-              console.log('Fetch response:', response.ok, response.status);
-              
-              if (response.ok) {
-                const arrayBuffer = await response.arrayBuffer();
-                console.log('ArrayBuffer size:', arrayBuffer.byteLength);
-                
-                // ArrayBufferをBase64エンコード
-                const uint8Array = new Uint8Array(arrayBuffer);
-                let binary = '';
-                for (let i = 0; i < uint8Array.length; i++) {
-                  binary += String.fromCharCode(uint8Array[i]);
-                }
-                base64Data = btoa(binary);
-                console.log('Base64 data length:', base64Data.length);
-              } else {
-                throw new Error(`Fetch failed: ${response.status}`);
-              }
-            } catch (error) {
-              console.error('ファイル読み込みエラー:', error);
-              
-              console.log('ファイル読み込みに失敗しました');
-            }
-          } else if (file.fileObject) {
-            console.log('フルパスなし、FileReaderでファイル本体を読み込み');
-            // フルパスがない場合（ドラッグ&ドロップ）：元のFileオブジェクトから読み込み
-            try {
-              const reader = new FileReader();
-              base64Data = await new Promise<string>((resolve, reject) => {
-                reader.onload = (e) => {
-                  const result = e.target?.result as string;
-                  if (result.startsWith('data:')) {
-                    resolve(result.split(',')[1]);
-                  } else {
-                    resolve(btoa(result));
-                  }
-                };
-                reader.onerror = (e) => reject(e);
-                reader.readAsDataURL(file.fileObject!);
-              });
-              console.log('FileReader Base64 data length:', base64Data.length);
-            } catch (error) {
-              console.error('FileReader読み込みエラー:', error);
-            }
-          }
-        } else {
-          // ブラウザ環境：FileReader使用（テスト用）
-          console.log('ブラウザ環境: プレビューからBase64取得');
-          if (file.preview && file.preview.startsWith('data:')) {
-            base64Data = file.preview.split(',')[1];
-          }
-        }
-        
-        console.log('最終的なBase64データ長:', base64Data.length);
-        
+        // 10MB未満の場合：ファイル情報のみ送信（WinShellPreview使用）
         return {
           name: file.name,
           path: apiFileName,
-          size: file.size,
-          base64Data: base64Data
+          size: file.size
         };
       }
     } catch (error) {
@@ -586,6 +480,7 @@ const MainWindow: React.FC = () => {
     const timestampedMessage = `[${timestamp}] ${message}`;
     setMessages(prev => [...prev, timestampedMessage]);
   };
+
 
   // 金額フォーマット関数
   const formatAmount = (value: string): string => {
@@ -819,13 +714,14 @@ const MainWindow: React.FC = () => {
               value={selectedPeriod}
               onChange={(e) => setSelectedPeriod(e.target.value)}
               className="flex-1 px-3 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:border-blue-500"
+              disabled={periods.length === 0}
             >
               {periods.length === 0 ? (
-                <option value="">期間を読み込み中...</option>
+                <option value="">期間データが取得できません</option>
               ) : (
                 periods.map((period) => (
                   <option key={period.name} value={period.name}>
-                    {period.name} ({period.fromDate} ～ {period.toDate})
+                    {period.name} ({period.fromDate || '未設定'} ～ {period.toDate || '未設定'})
                   </option>
                 ))
               )}
@@ -1036,38 +932,8 @@ const MainWindow: React.FC = () => {
                 </div>
               ) : droppedFiles.length === 1 ? (
                 // ファイル1つの場合、プレビューまたはアイコン表示
-                droppedFiles[0].preview && droppedFiles[0].type === 'application/pdf' ? (
-                  // PDFプレビュー
-                  <div className="w-full h-full flex items-center justify-center bg-gray-100 relative pdf-preview">
-                    <iframe 
-                      src={`${droppedFiles[0].preview}#page=1&toolbar=0&navpanes=0&scrollbar=0&statusbar=0&messages=0&view=Fit&zoom=page-fit`}
-                      className="border-0 pointer-events-none no-scrollbar"
-                      title={droppedFiles[0].name}
-                      scrolling="no"
-                      style={{ 
-                        width: '280px',
-                        height: '280px',
-                        overflow: 'hidden',
-                        transform: 'scale(0.85)',
-                        transformOrigin: 'center center',
-                        // スクロールバーを強制非表示
-                        scrollbarWidth: 'none',
-                        msOverflowStyle: 'none',
-                        WebkitOverflowScrolling: 'touch',
-                        // スクロールバー領域をカット
-                        marginRight: '-20px',
-                        marginBottom: '-20px'
-                      }}
-                    />
-                    {/* クリック可能な透明オーバーレイ */}
-                    <div 
-                      className="absolute inset-0 cursor-pointer"
-                      onClick={handleFileSelect}
-                      title="クリックして新しいファイルを選択"
-                    />
-                  </div>
-                ) : droppedFiles[0].preview && droppedFiles[0].type.startsWith('image/') ? (
-                  // 画像プレビュー
+                droppedFiles[0].preview ? (
+                  // WinShellPreviewによるプレビュー表示
                   <div className="w-full h-full relative">
                     <img 
                       src={droppedFiles[0].preview} 
@@ -1082,7 +948,7 @@ const MainWindow: React.FC = () => {
                     />
                   </div>
                 ) : (
-                  // その他のファイル（アイコン表示）
+                  // デフォルトアイコン表示
                   <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100 relative">
                     <div className="flex flex-col items-center space-y-2">
                       {getFileIcon(droppedFiles[0].type, droppedFiles[0].name)}

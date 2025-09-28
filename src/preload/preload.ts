@@ -41,6 +41,12 @@ const api = {
     getFilePath: (fileName: string) => ipcRenderer.invoke('get-file-path', fileName)
   },
 
+  // WinShellPreview operations
+  preview: {
+    getFilePreview: (filePath: string, outputPath?: string) => ipcRenderer.invoke('get-file-preview', filePath, outputPath),
+    getPreviewBase64: (filePath: string) => ipcRenderer.invoke('get-preview-base64', filePath)
+  },
+
   // Crypto operations
   crypto: {
     hash: (data: string, algorithm?: string) => ipcRenderer.invoke('crypto-hash', data, algorithm)
