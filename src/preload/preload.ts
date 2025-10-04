@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 // Define the API exposed to the renderer
 const api = {
@@ -41,10 +41,53 @@ const api = {
     getFilePath: (fileName: string) => ipcRenderer.invoke('get-file-path', fileName)
   },
 
-  // WinShellPreview operations
+  // WinShellPreview operations (now using thumbnail generation with icon fallback)
   preview: {
     getFilePreview: (filePath: string, outputPath?: string) => ipcRenderer.invoke('get-file-preview', filePath, outputPath),
-    getPreviewBase64: (filePath: string) => ipcRenderer.invoke('get-preview-base64', filePath)
+    getPreviewBase64: (filePath: string) => ipcRenderer.invoke('get-preview-base64', filePath),
+    getPreviewFromMemory: (fileData: number[], fileName: string) => ipcRenderer.invoke('get-preview-from-memory', fileData, fileName)
+  },
+
+  // File drop operations (secure method with real file paths)
+  files: {
+    // Get real file path from File object (Electron 32+)
+    getPathForFile: (file: File): string => {
+      return webUtils.getPathForFile(file);
+    },
+    
+    // Get paths for multiple files
+    getPathsForFiles: (files: FileList | File[]): string[] => {
+      return Array.from(files).map(file => webUtils.getPathForFile(file));
+    },
+    
+    // Process dropped file with real file path
+    processDroppedFile: (file: File): Promise<{
+      success: boolean;
+      name: string;
+      size: number;
+      type: string;
+      path: string;
+      preview?: string;
+      error?: string;
+    }> => {
+      return new Promise((resolve, reject) => {
+        try {
+          // Get real file path using webUtils
+          const filePath = webUtils.getPathForFile(file);
+          console.log('Real file path obtained:', filePath);
+          
+          // Send file path to main process for thumbnail generation
+          ipcRenderer.invoke('process-dropped-file-with-path', {
+            name: file.name,
+            size: file.size,
+            type: file.type,
+            path: filePath
+          }).then(resolve).catch(reject);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }
   },
 
   // Crypto operations

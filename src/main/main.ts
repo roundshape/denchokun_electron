@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, dialog, ipcMain, shell } from 'electron';
 import * as path from 'path';
 import { spawn } from 'child_process';
 import ApiClient from './api-client';
+import { getFileThumbnailBase64, getFileThumbnailFromMemory } from './winshell-preview';
 const Store = require('electron-store');
 
 // __dirname is already available in CommonJS
@@ -76,6 +77,23 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // ネイティブファイルドロップ処理
+  if (mainWindow) {
+    mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+      const url = new URL(navigationUrl);
+      if (url.protocol === 'file:') {
+        event.preventDefault();
+        const filePath = decodeURIComponent(url.pathname);
+        console.log('File dropped via native:', filePath);
+        
+        // フロントエンドにファイルパスを送信
+        if (mainWindow) {
+          mainWindow.webContents.send('file-dropped-native', filePath);
+        }
+      }
+    });
+  }
 }
 
 function createSetupWindow() {
@@ -435,8 +453,119 @@ ipcMain.handle('get-file-preview', async (event, filePath: string, outputPath?: 
   });
 });
 
-// プレビューファイルをBase64として取得
+// WinShellPreview.dll を直接使用
+
+// メモリデータから直接サムネイルを生成（アイコンフォールバック付き）
+ipcMain.handle('get-preview-from-memory', async (event, fileData: number[], fileName: string) => {
+  try {
+    console.log('Generating thumbnail from memory data for:', fileName, 'size:', fileData.length);
+    
+    // number[]をUint8Arrayに変換
+    const uint8Array = new Uint8Array(fileData);
+    
+    // koffiを使用してWinShellPreview.dllを直接呼び出し
+    const result = await getFileThumbnailFromMemory(uint8Array, fileName, 256);
+    
+    if (result.success) {
+      return {
+        success: true,
+        base64: result.base64,
+        originalPath: fileName
+      };
+    } else {
+      console.warn('Memory preview failed, no fallback available:', result.error);
+      return {
+        success: false,
+        error: result.error
+      };
+    }
+  } catch (error) {
+    console.error('Error in get-preview-from-memory:', error);
+    return {
+      success: false,
+      error: (error as Error).message
+    };
+  }
+});
+
+// サムネイルファイルをBase64として取得（アイコンフォールバック付き）
 ipcMain.handle('get-preview-base64', async (event, filePath: string) => {
+  try {
+    console.log('Generating thumbnail using updated DLL for:', filePath);
+    
+    // koffiを使用してWinShellPreview.dllを直接呼び出し
+    const result = await getFileThumbnailBase64(filePath, 256);
+    
+    if (result.success) {
+      return {
+        success: true,
+        base64: result.base64,
+        originalPath: filePath
+      };
+    } else {
+      // フォールバック: TestApp.exe を使用
+      console.warn('koffi failed, falling back to TestApp.exe:', result.error);
+      return await fallbackToTestApp(filePath);
+    }
+  } catch (error) {
+    console.error('Error in get-preview-base64:', error);
+    // フォールバック: TestApp.exe を使用
+    return await fallbackToTestApp(filePath);
+  }
+});
+
+// ドロップされたファイルを処理（実ファイルパスを使用）
+ipcMain.handle('process-dropped-file-with-path', async (event, fileData: {
+  name: string;
+  size: number;
+  type: string;
+  path: string; // Real file path
+}) => {
+  try {
+    console.log('Processing dropped file with path:', fileData.path);
+    console.log('File info:', { name: fileData.name, size: fileData.size, type: fileData.type });
+    
+    // 一時出力ファイルパスを生成
+    const tempOutputPath = path.join(app.getPath('temp'), `thumbnail_${Date.now()}.png`);
+    
+    // 実ファイルパスを使ってサムネイル生成（アイコンフォールバック付き）
+    const result = await getFileThumbnailBase64(fileData.path, 256);
+    
+    if (result.success) {
+      return {
+        success: true,
+        name: fileData.name,
+        size: fileData.size,
+        type: fileData.type,
+        path: fileData.path,
+        preview: result.base64
+      };
+    } else {
+      console.error('Thumbnail generation failed for dropped file:', result.error);
+      return {
+        success: false,
+        name: fileData.name,
+        size: fileData.size,
+        type: fileData.type,
+        path: fileData.path,
+        error: result.error
+      };
+    }
+  } catch (error) {
+    console.error('Error processing dropped file:', error);
+    return {
+      success: false,
+      name: fileData.name,
+      size: fileData.size,
+      type: fileData.type,
+      path: fileData.path,
+      error: (error as Error).message
+    };
+  }
+});
+
+// フォールバック関数: TestApp.exe を使用
+async function fallbackToTestApp(filePath: string) {
   try {
     // まずプレビューを生成
     const previewResult = await new Promise((resolve, reject) => {
@@ -450,9 +579,9 @@ ipcMain.handle('get-preview-base64', async (event, filePath: string) => {
       // 一時ファイルを生成
       const tempOutputPath = path.join(app.getPath('temp'), `preview_${Date.now()}.png`);
       
-      console.log('TestApp path:', testAppPath);
-      console.log('Input file:', filePath);
-      console.log('Output file:', tempOutputPath);
+      console.log('Fallback: TestApp path:', testAppPath);
+      console.log('Fallback: Input file:', filePath);
+      console.log('Fallback: Output file:', tempOutputPath);
       
       // TestApp.exe を実行してプレビューを生成
       const child = spawn(testAppPath, [filePath, tempOutputPath, '256'], {
@@ -520,7 +649,7 @@ ipcMain.handle('get-preview-base64', async (event, filePath: string) => {
       error: (error as Error).message
     };
   }
-});
+}
 
 // ファイルパス取得のためのIPC
 ipcMain.handle('get-file-path', async (event, fileName: string) => {

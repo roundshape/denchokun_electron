@@ -189,115 +189,70 @@ const MainWindow: React.FC = () => {
     setDragOver(false);
     const files = Array.from(e.dataTransfer.files);
     
+    addMessage(`${files.length}個のファイルを処理中...`);
+    
     const fileInfos = await Promise.all(files.map(async (file) => {
-      const fileInfo = {
-        name: file.name,
-        path: '',
-        size: file.size,
-        type: file.type,
-        preview: undefined as string | undefined,
-        fileObject: file // 元のFileオブジェクトを保存
-      };
-      
-      // Electronでフルパス取得を試行
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        // 複数の方法でパス取得を試行
-        const possiblePath = (file as any).path || 
-                           (file as any).webkitRelativePath || 
-                           (file as any).mozFullPath ||
-                           file.name;
+      try {
+        console.log('Processing dropped file:', file.name, 'size:', file.size, 'type:', file.type);
         
-        console.log('Raw file object:', file);
-        console.log('Possible path:', possiblePath);
-        console.log('File properties:', Object.getOwnPropertyNames(file));
-        
-        fileInfo.path = possiblePath;
-      } else {
-        // ブラウザ環境
-        fileInfo.path = `[ブラウザ] ${file.name}`;
-      }
-      
-      
-      // WinShellPreviewを使用してプレビュー生成
-      if (fileInfo.path && (fileInfo.path.includes('\\') || fileInfo.path.includes('/'))) {
-        try {
-          const previewResult = await window.electronAPI.preview.getPreviewBase64(fileInfo.path);
-          if (previewResult.success) {
-            fileInfo.preview = previewResult.base64;
+        // 新しいセキュアな方法でファイルを処理
+        if (typeof window !== 'undefined' && window.electronAPI && window.electronAPI.files) {
+          const result = await window.electronAPI.files.processDroppedFile(file);
+          
+          if (result.success) {
+            console.log('File processed successfully:', result.name);
+            console.log('Real file path:', result.path);
+            return {
+              name: result.name,
+              path: result.path, // 実際のファイルパス
+              size: result.size,
+              type: result.type,
+              preview: result.preview,
+              fileObject: file
+            };
+          } else {
+            console.error('File processing failed:', result.error);
+            // エラーの場合でもファイル情報は保持
+            return {
+              name: result.name,
+              path: `[Error] ${result.name}`,
+              size: result.size,
+              type: result.type,
+              preview: undefined,
+              fileObject: file
+            };
           }
-        } catch (error) {
-          console.error('WinShellPreviewエラー:', error);
+        } else {
+          // ブラウザ環境またはElectronAPIが利用できない場合のフォールバック
+          console.log('Using fallback method for:', file.name);
+          const objectUrl = URL.createObjectURL(file);
+          return {
+            name: file.name,
+            path: `[Browser] ${file.name}`,
+            size: file.size,
+            type: file.type,
+            preview: objectUrl,
+            fileObject: file
+          };
         }
+      } catch (error) {
+        console.error('Error processing file:', file.name, error);
+        return {
+          name: file.name,
+          path: `[Error] ${file.name}`,
+          size: file.size,
+          type: file.type,
+          preview: undefined,
+          fileObject: file
+        };
       }
-      
-      return fileInfo;
     }));
     
     setDroppedFiles(fileInfos);
-    addMessage(`${files.length}個のファイルがドロップされました`);
-    console.log('Dropped files:', fileInfos);
-    console.log('File paths:', fileInfos.map(f => f.path));
+    addMessage(`${files.length}個のファイルが処理されました`);
+    console.log('Processed files:', fileInfos);
   };
 
-  // ファイル選択ダイアログ
-  const handleFileSelect = async () => {
-    try {
-      if (typeof window !== 'undefined' && window.electronAPI) {
-        const filePaths = await window.electronAPI.selectFiles({
-          filters: [
-            { name: 'すべてのファイル', extensions: ['*'] },
-            { name: '画像ファイル', extensions: ['jpg', 'jpeg', 'png', 'gif', 'pdf'] },
-            { name: 'PDFファイル', extensions: ['pdf'] }
-          ]
-        });
-        
-        if (filePaths && filePaths.length > 0) {
-          // ファイル選択ダイアログで選択されたファイルは確実にフルパス取得可能
-          const fileInfos = await Promise.all(filePaths.map(async (filePath: string) => {
-            const fileName = filePath.split('\\').pop() || filePath.split('/').pop() || filePath;
-            
-            // ファイルサイズを取得
-            let fileSize = 0;
-            try {
-              if (typeof window !== 'undefined' && window.electronAPI) {
-                const stats = await window.electronAPI.fs.stat(filePath);
-                fileSize = stats.size;
-              }
-            } catch (error) {
-              console.error('ファイルサイズ取得エラー:', error);
-            }
-            
-            const fileInfo = {
-              name: fileName,
-              path: filePath, // フルパス確実に取得
-              size: fileSize, // 実際のファイルサイズ
-              type: getFileType(fileName),
-              preview: undefined as string | undefined
-            };
-            
-            // WinShellPreviewを使用してプレビュー生成
-            try {
-              const previewResult = await window.electronAPI.preview.getPreviewBase64(filePath);
-              if (previewResult.success) {
-                fileInfo.preview = previewResult.base64;
-              }
-            } catch (error) {
-              console.error('WinShellPreviewエラー:', error);
-            }
-            
-            return fileInfo;
-          }));
-          
-          setDroppedFiles(fileInfos);
-          addMessage(`${fileInfos.length}個のファイルが選択されました`);
-          console.log('Selected files with full paths:', fileInfos);
-        }
-      }
-    } catch (error) {
-      console.error('ファイル選択エラー:', error);
-      addMessage('ファイル選択でエラーが発生しました');
-    }
-  };
 
   // ファイルタイプ推定
   const getFileType = (fileName: string): string => {
@@ -915,19 +870,28 @@ const MainWindow: React.FC = () => {
             {/* File Drop Area */}
             <div
               className={`border-2 border-dashed ${
-                dragOver ? 'border-blue-400 bg-blue-50' : 'border-gray-300'
-              } rounded-lg overflow-hidden relative cursor-pointer`}
+                dragOver ? 'border-blue-500 bg-blue-50' : 'border-gray-400'
+              } rounded-lg overflow-hidden relative transition-colors duration-200`}
               style={{ width: '300px', height: '300px' }}
               onDragOver={handleDragOver}
               onDragLeave={handleDragLeave}
               onDrop={handleDrop}
-              onClick={droppedFiles.length === 0 ? handleFileSelect : undefined}
             >
               {droppedFiles.length === 0 ? (
-                <div className="flex items-center justify-center h-full">
-                  <div className="text-center text-gray-500">
-                    <p>ここに登録するファイルをドロップ</p>
-                    <p className="text-xs mt-2">またはクリックしてファイル選択</p>
+                <div className="flex items-center justify-center h-full p-6">
+                  <div className="text-center">
+                    <div className="mb-4">
+                      <svg className="mx-auto h-16 w-16 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                      </svg>
+                    </div>
+                    <p className="text-lg font-medium text-gray-700 mb-2">📁 ファイルをドラッグ&ドロップ</p>
+                    <p className="text-sm text-gray-500 mb-3">複数ファイル対応</p>
+                    <div className="text-xs text-gray-400 space-y-1">
+                      <p>✓ PDF, 画像 (JPG, PNG, GIF)</p>
+                      <p>✓ Office文書 (Word, Excel, PowerPoint)</p>
+                      <p>✓ 動画, その他のファイル</p>
+                    </div>
                   </div>
                 </div>
               ) : droppedFiles.length === 1 ? (
@@ -938,18 +902,12 @@ const MainWindow: React.FC = () => {
                     <img 
                       src={droppedFiles[0].preview} 
                       alt={droppedFiles[0].name}
-                      className="w-full h-full object-contain pointer-events-none"
-                    />
-                    {/* クリック可能な透明オーバーレイ */}
-                    <div 
-                      className="absolute inset-0 cursor-pointer"
-                      onClick={handleFileSelect}
-                      title="クリックして新しいファイルを選択"
+                      className="w-full h-full object-contain"
                     />
                   </div>
                 ) : (
                   // デフォルトアイコン表示
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100 relative">
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-100">
                     <div className="flex flex-col items-center space-y-2">
                       {getFileIcon(droppedFiles[0].type, droppedFiles[0].name)}
                       <div className="text-center">
@@ -961,12 +919,6 @@ const MainWindow: React.FC = () => {
                         </div>
                       </div>
                     </div>
-                    {/* クリック可能な透明オーバーレイ */}
-                    <div 
-                      className="absolute inset-0 cursor-pointer"
-                      onClick={handleFileSelect}
-                      title="クリックして新しいファイルを選択"
-                    />
                   </div>
                 )
               ) : (
