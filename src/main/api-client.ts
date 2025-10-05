@@ -60,6 +60,7 @@ class ApiClient {
       method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
       data?: any;
       headers?: Record<string, string>;
+      isMultipart?: boolean;
     }) => {
       const baseUrl = options.server === 'denchokun' 
         ? this.config.denchokunServerUrl 
@@ -69,27 +70,87 @@ class ApiClient {
       const method = options.method || 'GET';
 
       try {
-        const response = await fetch(url, {
-          method,
-          headers: {
+        if (options.isMultipart && options.data) {
+          // multipart/form-dataの場合はaxiosを使用
+          const axios = require('axios');
+          const FormData = require('form-data');
+          const fs = require('fs');
+          const formData = new FormData();
+
+          console.log('[API Client] Building multipart form data...');
+          console.log('[API Client] dealData:', options.data.dealData);
+          console.log('[API Client] file:', options.data.file);
+
+          // dealDataをJSON文字列として追加
+          if (options.data.dealData) {
+            const dealDataJson = JSON.stringify(options.data.dealData);
+            formData.append('dealData', dealDataJson);
+            console.log('[API Client] Added dealData:', dealDataJson);
+          }
+
+          // ファイルを追加
+          if (options.data.file && options.data.file.path) {
+            try {
+              const fileStream = fs.createReadStream(options.data.file.path);
+              formData.append('file', fileStream, {
+                filename: options.data.file.name,
+                contentType: options.data.file.type
+              });
+              console.log('[API Client] Added file:', options.data.file.name, 'from path:', options.data.file.path);
+            } catch (fileError) {
+              console.error('[API Client] File read error:', fileError);
+            }
+          }
+
+          console.log('[API Client] Sending multipart request to:', url);
+          
+          const response = await axios({
+            method: method.toLowerCase(),
+            url: url,
+            data: formData,
+            headers: {
+              ...formData.getHeaders(),
+              ...options.headers
+            },
+            maxContentLength: Infinity,
+            maxBodyLength: Infinity
+          });
+
+          console.log('[API Client] Response status:', response.status);
+          return response.data;
+        } else {
+          // 通常のJSONリクエスト（fetchを使用）
+          let headers: Record<string, string> = {
             'Content-Type': 'application/json',
             ...options.headers
-          },
-          body: options.data ? JSON.stringify(options.data) : undefined
-        });
+          };
+          let body = options.data ? JSON.stringify(options.data) : undefined;
 
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
+          console.log('[API Client] Sending JSON request to:', url);
+          
+          const response = await fetch(url, {
+            method,
+            headers,
+            body
+          });
 
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          return await response.json();
-        } else {
-          return await response.text();
+          console.log('[API Client] Response status:', response.status);
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('[API Client] Error response:', errorText);
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          const contentType = response.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            return await response.json();
+          } else {
+            return await response.text();
+          }
         }
       } catch (error) {
-        console.error('API Request failed:', error);
+        console.error('[API Client] API Request failed:', error);
         throw error;
       }
     });

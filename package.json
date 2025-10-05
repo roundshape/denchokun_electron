@@ -74,6 +74,8 @@
     "vite": "^7.1.6"
   },
   "dependencies": {
+    "axios": "^1.12.2",
+    "form-data": "^4.0.4",
     "koffi": "^2.14.1"
   }
 }

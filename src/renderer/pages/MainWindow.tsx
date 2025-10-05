@@ -47,6 +47,22 @@ const MainWindow: React.FC = () => {
     initializeApp();
   }, []);
 
+  // 選択された期間が変更されたら保存
+  useEffect(() => {
+    const savePeriod = async () => {
+      if (selectedPeriod && typeof window !== 'undefined' && window.electronAPI) {
+        try {
+          await window.electronAPI.store.set('selectedPeriod', selectedPeriod);
+          console.log('取引期間を保存しました:', selectedPeriod);
+        } catch (error) {
+          console.error('取引期間の保存エラー:', error);
+        }
+      }
+    };
+    
+    savePeriod();
+  }, [selectedPeriod]);
+
   const loadInputHistory = async () => {
     try {
       // Electron環境でのみ実行
@@ -152,11 +168,30 @@ const MainWindow: React.FC = () => {
       
       if (result.success && result.periods && Array.isArray(result.periods)) {
         setPeriods(result.periods);
-        // 最初の期間を選択状態にする
-        if (result.periods.length > 0 && !selectedPeriod) {
-          setSelectedPeriod(result.periods[0].name);
+        
+        // 前回保存された期間を復元
+        let savedPeriod = '';
+        if (typeof window !== 'undefined' && window.electronAPI) {
+          try {
+            savedPeriod = await window.electronAPI.store.get('selectedPeriod', '');
+            console.log('保存されていた取引期間:', savedPeriod);
+          } catch (error) {
+            console.error('取引期間の読み込みエラー:', error);
+          }
         }
-        addMessage(`${result.periods.length}個の期間を取得しました`);
+        
+        // 保存された期間が存在するかチェック
+        const periodExists = savedPeriod && result.periods.some((p: any) => p.name === savedPeriod);
+        
+        if (periodExists) {
+          // 保存された期間が存在する場合はそれを設定
+          setSelectedPeriod(savedPeriod);
+          addMessage(`${result.periods.length}個の期間を取得しました（前回の期間: ${savedPeriod}）`);
+        } else if (result.periods.length > 0) {
+          // 保存された期間がない、または存在しない場合は最初の期間を設定
+          setSelectedPeriod(result.periods[0].name);
+          addMessage(`${result.periods.length}個の期間を取得しました`);
+        }
       } else {
         console.warn('期間データが取得できませんでした:', result);
         addMessage('期間データが取得できませんでした。APIサーバーの接続を確認してください。');
@@ -392,7 +427,7 @@ const MainWindow: React.FC = () => {
   };
 
   // API通信関数
-  const callAPI = async (endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: any) => {
+  const callAPI = async (endpoint: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', data?: any, isMultipart: boolean = false) => {
     try {
       if (typeof window !== 'undefined' && window.electronAPI) {
         // Electron環境：IPCを使用
@@ -400,17 +435,41 @@ const MainWindow: React.FC = () => {
           server: 'denchokun',
           endpoint,
           method,
-          data
+          data,
+          isMultipart
         });
         return result;
       } else {
         // ブラウザ環境：直接fetch
+        let body: any;
+        let headers: Record<string, string> = {};
+
+        if (isMultipart && data) {
+          // multipart/form-dataの場合
+          const formData = new FormData();
+          
+          // dealDataをJSON文字列として追加
+          if (data.dealData) {
+            formData.append('dealData', JSON.stringify(data.dealData));
+          }
+          
+          // ファイルを追加
+          if (data.file && data.file.fileObject) {
+            formData.append('file', data.file.fileObject);
+          }
+          
+          body = formData;
+          // Content-Typeヘッダーは自動設定されるため、明示的に設定しない
+        } else {
+          // 通常のJSONリクエスト
+          headers['Content-Type'] = 'application/json';
+          body = data ? JSON.stringify(data) : undefined;
+        }
+
         const response = await fetch(`${apiServerUrl}${endpoint}`, {
           method,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: data ? JSON.stringify(data) : undefined
+          headers,
+          body
         });
         
         if (!response.ok) {
@@ -569,26 +628,40 @@ const MainWindow: React.FC = () => {
     }
 
     try {
-      // APIサーバーに取引データを送信（API仕様に準拠）
-      const transactionData = {
+      // multipart/form-data形式で取引データを送信
+      const dealData = {
         period: selectedPeriod,
-        dealData: {
-          DealType: docType,
-          DealDate: dealDate,
-          DealName: dealName,
-          DealPartner: partner,
-          DealPrice: parseFloat(amount),
-          DealRemark: remarks,
-          RecStatus: "NEW"
-        },
-        fileData: droppedFiles.length > 0 ? await processFileForUpload(droppedFiles[0]) : null
+        DealType: docType,
+        DealDate: dealDate,
+        DealName: dealName,
+        DealPartner: partner,
+        DealPrice: parseFloat(amount),
+        DealRemark: remarks,
+        RecStatus: "NEW"
       };
 
-      console.log('取引データを送信:', transactionData);
+      // ファイルデータの準備
+      let fileInfo = null;
+      if (droppedFiles.length > 0) {
+        const droppedFile = droppedFiles[0];
+        // ファイルオブジェクトまたはパス情報を使用
+        fileInfo = {
+          path: droppedFile.path,
+          name: droppedFile.name,
+          type: droppedFile.type,
+          size: droppedFile.size,
+          fileObject: droppedFile.fileObject // ブラウザ環境用
+        };
+      }
+
+      console.log('取引データを送信:', { dealData, file: fileInfo });
       addMessage('APIサーバーに取引データを送信中...');
 
-      // API呼び出し
-      const result = await callAPI('/v1/api/deals', 'POST', transactionData);
+      // API呼び出し（multipart/form-data形式）
+      const result = await callAPI('/v1/api/deals', 'POST', {
+        dealData,
+        file: fileInfo
+      }, true); // 第4引数にtrue（multipart）を指定
       
       console.log('API応答:', result);
       
@@ -620,7 +693,7 @@ const MainWindow: React.FC = () => {
         alert('取引が正常に登録されました。');
       }
 
-      handleReset();
+      // 登録成功後もフォームの内容を保持（リセットしない）
     } catch (error) {
       console.error('保存エラー:', error);
       addMessage('登録エラー: 取引データの登録に失敗しました');
@@ -682,7 +755,23 @@ const MainWindow: React.FC = () => {
               )}
             </select>
           </div>
-          <button className="px-4 py-2 bg-gray-600 text-white text-sm rounded hover:bg-gray-700">
+          <button 
+            onClick={async () => {
+              if (typeof window !== 'undefined' && window.electronAPI) {
+                if (!selectedPeriod) {
+                  await window.electronAPI.showMessageBox({
+                    type: 'warning',
+                    title: '期間未選択',
+                    message: '期間を選択してください。',
+                    buttons: ['OK']
+                  });
+                  return;
+                }
+                await window.electronAPI.openDealPeriodSearch(selectedPeriod);
+              }
+            }}
+            className="px-4 py-2 bg-gray-600 text-white text-sm rounded hover:bg-gray-700"
+          >
             期間表示
           </button>
         </div>

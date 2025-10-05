@@ -3,6 +3,8 @@ import { Routes, Route, useNavigate } from 'react-router-dom';
 import MainWindow from './pages/MainWindow';
 import SetupWindow from './pages/SetupWindow';
 import DealPeriodWindow from './pages/DealPeriodWindow';
+import DealPeriodSearchWindow from './pages/DealPeriodSearchWindow';
+import DealDetailWindow from './pages/DealDetailWindow';
 import AboutWindow from './pages/AboutWindow';
 import EnvironmentWindow from './pages/EnvironmentWindow';
 
@@ -42,6 +44,8 @@ const App: React.FC = () => {
         <Route path="/" element={<MainWindow />} />
         <Route path="/setup" element={<SetupWindow />} />
         <Route path="/periods" element={<DealPeriodWindow />} />
+        <Route path="/deal-period-search" element={<DealPeriodSearchWindow />} />
+        <Route path="/deal-detail" element={<DealDetailWindow />} />
         <Route path="/about" element={<AboutWindow />} />
         <Route path="/environment" element={<EnvironmentWindow />} />
       </Routes>

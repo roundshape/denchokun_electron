@@ -13,6 +13,10 @@ const apiClient = new ApiClient();
 
 let mainWindow: BrowserWindow | null = null;
 let setupWindow: BrowserWindow | null = null;
+// 複数の期間検索ウィンドウを管理（期間名をキーとするMap）
+const dealPeriodSearchWindows = new Map<string, BrowserWindow>();
+// 詳細ウィンドウを管理（親ウィンドウIDをキーとするMap）
+const dealDetailWindows = new Map<number, BrowserWindow>();
 
 function createWindow() {
   // ウィンドウサイズを強制的にリセット
@@ -74,6 +78,22 @@ function createWindow() {
     }
   });
 
+  mainWindow.on('close', () => {
+    // メインウィンドウが閉じられる時、他の開いているウィンドウも閉じる
+    // すべての期間検索ウィンドウを閉じる
+    dealPeriodSearchWindows.forEach((window, periodName) => {
+      if (window && !window.isDestroyed()) {
+        console.log(`Closing period search window: ${periodName}`);
+        window.close();
+      }
+    });
+    dealPeriodSearchWindows.clear();
+    
+    if (setupWindow) {
+      setupWindow.close();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -120,6 +140,104 @@ function createSetupWindow() {
 
   setupWindow.on('closed', () => {
     setupWindow = null;
+  });
+}
+
+function createDealPeriodSearchWindow(periodName: string) {
+  // 既に同じ期間のウィンドウが開いている場合はフォーカスする
+  if (dealPeriodSearchWindows.has(periodName)) {
+    const existingWindow = dealPeriodSearchWindows.get(periodName);
+    if (existingWindow && !existingWindow.isDestroyed()) {
+      existingWindow.focus();
+      return;
+    } else {
+      // ウィンドウが破棄されている場合はMapから削除
+      dealPeriodSearchWindows.delete(periodName);
+    }
+  }
+
+  const newWindow = new BrowserWindow({
+    width: 900,
+    height: 550,
+    minWidth: 900,
+    minHeight: 550,
+    title: `期間検索 - ${periodName} - 電帳君`,
+    // 親子関係なし（独立ウィンドウとして自由に切り替え可能）
+    icon: path.join(__dirname, '../../build/icon.ico'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, '../preload/preload.js')
+    }
+  });
+
+  // URLパラメータで期間名を渡す
+  const encodedPeriodName = encodeURIComponent(periodName);
+  if (isDev) {
+    newWindow.loadURL(`http://localhost:5173/#/deal-period-search?period=${encodedPeriodName}`);
+  } else {
+    newWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
+      hash: `/deal-period-search?period=${encodedPeriodName}`
+    });
+  }
+
+  // ウィンドウをMapに追加
+  dealPeriodSearchWindows.set(periodName, newWindow);
+
+  // ウィンドウが閉じられたらMapから削除
+  newWindow.on('closed', () => {
+    dealPeriodSearchWindows.delete(periodName);
+    console.log(`Period search window closed: ${periodName}`);
+  });
+}
+
+function createDealDetailWindow(parentWindow: BrowserWindow, dealData: any) {
+  const parentId = parentWindow.id;
+  
+  // 既に同じ親ウィンドウの詳細ウィンドウが開いている場合は閉じる
+  if (dealDetailWindows.has(parentId)) {
+    const existingWindow = dealDetailWindows.get(parentId);
+    if (existingWindow && !existingWindow.isDestroyed()) {
+      existingWindow.close();
+    }
+    dealDetailWindows.delete(parentId);
+  }
+
+  const detailWindow = new BrowserWindow({
+    width: 750,
+    height: 600,
+    title: `取引詳細 - ${dealData.NO}`,
+    parent: parentWindow,
+    modal: true,
+    alwaysOnTop: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    icon: path.join(__dirname, '../../build/icon.ico'),
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      preload: path.join(__dirname, '../preload/preload.js')
+    }
+  });
+
+  // 取引データをURLパラメータで渡す
+  const encodedDealData = encodeURIComponent(JSON.stringify(dealData));
+  if (isDev) {
+    detailWindow.loadURL(`http://localhost:5173/#/deal-detail?deal=${encodedDealData}`);
+  } else {
+    detailWindow.loadFile(path.join(__dirname, '../renderer/index.html'), {
+      hash: `/deal-detail?deal=${encodedDealData}`
+    });
+  }
+
+  // ウィンドウをMapに追加
+  dealDetailWindows.set(parentId, detailWindow);
+
+  // ウィンドウが閉じられたらMapから削除
+  detailWindow.on('closed', () => {
+    dealDetailWindows.delete(parentId);
+    console.log(`Deal detail window closed for parent: ${parentId}`);
   });
 }
 
@@ -264,6 +382,40 @@ function createMenu() {
 }
 
 // IPC Handlers
+ipcMain.handle('open-deal-period-search', (event, periodName: string) => {
+  if (!periodName) {
+    console.error('Period name is required to open deal period search window');
+    return;
+  }
+  createDealPeriodSearchWindow(periodName);
+});
+
+ipcMain.handle('open-deal-detail', (event, dealData: any) => {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!senderWindow) {
+    console.error('Could not find sender window');
+    return;
+  }
+  createDealDetailWindow(senderWindow, dealData);
+});
+
+ipcMain.on('deal-updated', (event) => {
+  // 送信元のウィンドウを特定
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!senderWindow) {
+    console.error('Could not find sender window');
+    return;
+  }
+
+  // 送信元の親ウィンドウを取得
+  const parentWindow = senderWindow.getParentWindow();
+  if (parentWindow && !parentWindow.isDestroyed()) {
+    // 親ウィンドウに通知を送信
+    parentWindow.webContents.send('deal-updated');
+    console.log('Notified parent window of deal update');
+  }
+});
+
 ipcMain.handle('select-folder', async () => {
   const result = await dialog.showOpenDialog({
     properties: ['openDirectory']

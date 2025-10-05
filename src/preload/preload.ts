@@ -10,6 +10,17 @@ const api = {
   // Dialog operations
   showMessageBox: (options: any) => ipcRenderer.invoke('show-message-box', options),
 
+  // Window operations
+  openDealPeriodSearch: (periodName: string) => ipcRenderer.invoke('open-deal-period-search', periodName),
+  openDealDetail: (dealData: any) => ipcRenderer.invoke('open-deal-detail', dealData),
+  notifyDealUpdated: () => ipcRenderer.send('deal-updated'),
+  onDealUpdated: (callback: () => void) => {
+    ipcRenderer.on('deal-updated', callback);
+  },
+  removeDealUpdatedListener: () => {
+    ipcRenderer.removeAllListeners('deal-updated');
+  },
+
   // App paths
   getAppPath: () => ipcRenderer.invoke('get-app-path'),
 
