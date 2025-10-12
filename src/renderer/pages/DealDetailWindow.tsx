@@ -25,6 +25,7 @@ const DealDetailWindow: React.FC = () => {
   // 期間関連
   const [periods, setPeriods] = useState<{name: string, fromDate: string, toDate: string}[]>([]);
   const [selectedPeriod, setSelectedPeriod] = useState<string>('');
+  const [originalPeriod, setOriginalPeriod] = useState<string>(''); // 元の期間（取引を開いた時の期間）
   
   // 編集可能なフィールド
   const [dealDate, setDealDate] = useState<string>('');
@@ -42,6 +43,9 @@ const DealDetailWindow: React.FC = () => {
   
   // メッセージ
   const [message, setMessage] = useState<string>('');
+  
+  // 削除確認ダイアログ
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
 
   useEffect(() => {
     // URLパラメータから取引データを取得
@@ -72,6 +76,7 @@ const DealDetailWindow: React.FC = () => {
         // 親から渡された期間を設定
         if (dealData._period) {
           setSelectedPeriod(dealData._period);
+          setOriginalPeriod(dealData._period); // 元の期間も保存
         }
         
         const versionLabel = dealData.RecStatus === 'NEW' ? '' : ' (過去のバージョン)';
@@ -96,6 +101,29 @@ const DealDetailWindow: React.FC = () => {
       loadExistingFilePreview(originalDeal.NO, selectedPeriod);
     }
   }, [selectedPeriod, originalDeal]);
+
+  // ドラッグ&ドロップのデフォルト動作を防ぐ
+  // ドロップエリア外でファイルをドロップした際に、ブラウザのデフォルト動作
+  // （ファイルを開く、ナビゲーション等）が発生しないようにする。
+  // これにより、意図しない操作が親ウィンドウに伝播してしまい、
+  // モーダルダイアログである本ウィンドウが背面に隠れることを防ぐ。
+  // preventDefault()のみを使用し、stopPropagation()は使わないことで、
+  // ドロップエリア内での正常なドロップ処理は影響を受けない。
+  useEffect(() => {
+    const preventDefaults = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    // キャプチャフェーズで処理することで、デフォルト動作を防ぎつつ
+    // イベントはバブリングフェーズでドロップエリアに到達する
+    document.addEventListener('dragover', preventDefaults, true);
+    document.addEventListener('drop', preventDefaults, true);
+
+    return () => {
+      document.removeEventListener('dragover', preventDefaults, true);
+      document.removeEventListener('drop', preventDefaults, true);
+    };
+  }, []);
 
   const loadPeriods = async () => {
     try {
@@ -223,6 +251,67 @@ const DealDetailWindow: React.FC = () => {
     }
   };
 
+  const handleDelete = () => {
+    if (!originalDeal) {
+      setMessage('エラー: 取引データが見つかりません');
+      return;
+    }
+
+    if (!isLatestVersion) {
+      setMessage('エラー: 過去のバージョンは削除できません');
+      return;
+    }
+
+    // 削除確認ダイアログを表示
+    setShowDeleteConfirm(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    setShowDeleteConfirm(false);
+
+    if (!originalDeal) {
+      setMessage('エラー: 取引データが見つかりません');
+      return;
+    }
+
+    try {
+      setMessage('削除中...');
+
+      // API呼び出し
+      if (typeof window !== 'undefined' && window.electronAPI) {
+        const result = await window.electronAPI.api.request({
+          server: 'denchokun',
+          endpoint: `/v1/api/deals/${originalDeal.NO}?period=${encodeURIComponent(originalPeriod)}`,
+          method: 'DELETE'
+        });
+
+        if (result.success) {
+          setMessage('削除が完了しました');
+          
+          // 親ウィンドウに更新を通知
+          if (window.electronAPI) {
+            window.electronAPI.notifyDealUpdated();
+          }
+          
+          // 少し待ってからウィンドウを閉じる
+          setTimeout(() => {
+            window.close();
+          }, 500);
+        } else {
+          setMessage(`削除に失敗しました: ${result.message || result.error || '不明なエラー'}`);
+        }
+      }
+    } catch (error) {
+      console.error('削除エラー:', error);
+      setMessage(`削除に失敗しました: ${(error as Error).message}`);
+    }
+  };
+
+  const handleDeleteCancel = () => {
+    setShowDeleteConfirm(false);
+    setMessage('削除をキャンセルしました');
+  };
+
   const handleUpdate = async () => {
     if (!originalDeal) {
       setMessage('エラー: 取引データが見つかりません');
@@ -234,7 +323,7 @@ const DealDetailWindow: React.FC = () => {
       return;
     }
 
-    // バリデーション
+    // バリデーション（必須項目）
     if (!dealDate) {
       setMessage('取引日を入力してください');
       return;
@@ -247,29 +336,42 @@ const DealDetailWindow: React.FC = () => {
       setMessage('取引先を入力してください');
       return;
     }
-    if (!dealName) {
-      setMessage('取引名を入力してください');
-      return;
+
+    // 取引日が期間の範囲内かチェック
+    const selectedPeriodData = periods.find(p => p.name === selectedPeriod);
+    if (selectedPeriodData) {
+      const fromDate = selectedPeriodData.fromDate;
+      const toDate = selectedPeriodData.toDate;
+      
+      // 開始日チェック（開始日が指定されている場合）
+      if (fromDate && fromDate !== '未設定' && dealDate < fromDate) {
+        setMessage(`取引日は期間の開始日（${fromDate}）以降である必要があります`);
+        return;
+      }
+      
+      // 終了日チェック（終了日が指定されている場合）
+      if (toDate && toDate !== '未設定' && dealDate > toDate) {
+        setMessage(`取引日は期間の終了日（${toDate}）以前である必要があります`);
+        return;
+      }
     }
 
     try {
       setMessage('更新中...');
       
-      // リクエストボディを構築
-      const requestBody: any = {
-        period: selectedPeriod,
-        dealData: {
-          DealType: docType,
-          DealDate: dealDate,
-          DealName: dealName,
-          DealPartner: partner,
-          DealPrice: parseInt(amount),
-          DealRemark: remarks,
-          RecStatus: 'UPDATE'
-        }
+      // 取引データを構築
+      const dealData = {
+        DealType: docType,
+        DealDate: dealDate,
+        DealName: dealName,
+        DealPartner: partner,
+        DealPrice: parseInt(amount),
+        DealRemark: remarks,
+        RecStatus: 'UPDATE'
       };
 
-      // 新しいファイルがドロップされている場合
+      // ファイルデータの準備（メイン画面と同じ形式）
+      let fileInfo = null;
       if (isNewFile && droppedFiles.length > 0 && droppedFiles[0].fileObject) {
         const file = droppedFiles[0];
         
@@ -278,28 +380,44 @@ const DealDetailWindow: React.FC = () => {
           return;
         }
         
-        // ファイルをBase64に変換
-        const base64Data = await fileToBase64(file.fileObject);
-        
-        // ファイル名を生成（取引日_取引先_金額.拡張子）
-        const extension = file.name.split('.').pop();
-        const apiFileName = `${dealDate}_${partner}_${amount}.${extension}`;
-        
-        requestBody.fileData = {
+        // ファイル情報をそのまま送信（Base64変換しない）
+        fileInfo = {
+          path: file.path,
           name: file.name,
-          path: apiFileName,
+          type: file.type,
           size: file.size,
-          base64Data: base64Data
+          fileObject: file.fileObject
         };
       }
 
-      // API呼び出し
+      // クエリパラメータを構築
+      const params = new URLSearchParams();
+      if (originalPeriod) {
+        params.append('period', originalPeriod); // 元の期間
+      }
+      // 期間が変更された場合は toPeriod を追加
+      if (selectedPeriod !== originalPeriod) {
+        params.append('toPeriod', selectedPeriod); // 移動先期間
+      }
+
+      // リクエストボディを構築（multipart/form-data形式）
+      // 注意: period や toPeriod は含めない（クエリパラメータで指定）
+      const requestBody: any = {
+        dealData: dealData,
+        file: fileInfo
+      };
+
+      // エンドポイントにクエリパラメータを追加
+      const endpoint = `/v1/api/deals/${originalDeal.NO}${params.toString() ? '?' + params.toString() : ''}`;
+
+      // API呼び出し（multipart/form-data形式）
       if (typeof window !== 'undefined' && window.electronAPI) {
         const result = await window.electronAPI.api.request({
           server: 'denchokun',
-          endpoint: `/v1/api/deals/${originalDeal.NO}`,
+          endpoint: endpoint,
           method: 'PUT',
-          data: requestBody
+          data: requestBody,
+          isMultipart: true // multipart形式を指定
         });
 
         if (result.success) {
@@ -318,19 +436,6 @@ const DealDetailWindow: React.FC = () => {
     }
   };
 
-  // ファイルをBase64に変換
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const base64 = (reader.result as string).split(',')[1]; // data:image/png;base64, の部分を除去
-        resolve(base64);
-      };
-      reader.onerror = reject;
-      reader.readAsDataURL(file);
-    });
-  };
-
   if (!originalDeal) {
     return (
       <div className="flex items-center justify-center h-screen">
@@ -340,7 +445,7 @@ const DealDetailWindow: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-50">
+    <div className="flex flex-col h-screen bg-gray-50 relative">
       <div className="flex-1 overflow-auto px-2 py-1">
         <div className="flex gap-2">
           {/* Left Column - Input Fields */}
@@ -522,17 +627,30 @@ const DealDetailWindow: React.FC = () => {
         >
           閉じる
         </button>
-        <button
-          onClick={handleUpdate}
-          disabled={!isLatestVersion}
-          className={`w-full py-2 rounded transition-colors ${
-            isLatestVersion 
-              ? 'bg-blue-600 text-white hover:bg-blue-700 cursor-pointer' 
-              : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-          }`}
-        >
-          更新
-        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            onClick={handleDelete}
+            disabled={!isLatestVersion}
+            className={`py-2 rounded transition-colors ${
+              isLatestVersion 
+                ? 'bg-red-600 text-white hover:bg-red-700 cursor-pointer' 
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            削除
+          </button>
+          <button
+            onClick={handleUpdate}
+            disabled={!isLatestVersion}
+            className={`py-2 rounded transition-colors ${
+              isLatestVersion 
+                ? 'bg-blue-600 text-white hover:bg-blue-700 cursor-pointer' 
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            更新
+          </button>
+        </div>
       </div>
 
       {/* Message Area */}
@@ -551,6 +669,37 @@ const DealDetailWindow: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* 削除確認ダイアログ */}
+      {showDeleteConfirm && (
+        <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 max-w-md mx-4">
+            <div className="mb-4">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">削除確認</h3>
+              <p className="text-sm text-gray-700 mb-2">
+                取引 <span className="font-mono font-bold">{originalDeal?.NO}</span> を削除しますか？
+              </p>
+              <p className="text-sm text-red-600 font-semibold">
+                ⚠ この操作は取り消せません
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <button
+                onClick={handleDeleteCancel}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors"
+              >
+                キャンセル
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+              >
+                削除
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

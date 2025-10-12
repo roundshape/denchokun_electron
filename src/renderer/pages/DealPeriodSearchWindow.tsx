@@ -75,11 +75,50 @@ const DealPeriodSearchWindow: React.FC = () => {
   }, [selectedPeriod, filterDateFrom, filterDateTo, filterPartner, showHistory]);
 
   useEffect(() => {
+    // メニューイベントを受信
+    if (typeof window !== 'undefined' && window.electronAPI) {
+      window.electronAPI.onMenuAction((action: string) => {
+        if (action === 'menu-expand-all') {
+          handleExpandAll();
+        } else if (action === 'menu-collapse-all') {
+          handleCollapseAll();
+        }
+      });
+      
+      return () => {
+        if (window.electronAPI) {
+          window.electronAPI.removeMenuListeners();
+        }
+      };
+    }
+  }, [filteredDeals]);
+
+  useEffect(() => {
     // 履歴表示チェックボックスが変更されたら、検索結果がある場合は自動的に再検索
     if (filteredDeals.length > 0) {
       handleSearch();
     }
   }, [showHistory]);
+
+  // ドラッグ&ドロップのデフォルト動作を防ぐ
+  // この画面にはドロップエリアが存在しないため、ファイルをドラッグした際に
+  // ブラウザのデフォルト動作（ファイルを開く、ナビゲーション等）が発生しないようにする。
+  // 特に、この画面から開かれたモーダルウィンドウ（更新画面）でドラッグ操作をしている時に、
+  // この親ウィンドウが意図せず前面に表示されることを防ぐために重要。
+  useEffect(() => {
+    const preventDefaults = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    // キャプチャフェーズで処理することで、デフォルト動作を防ぐ
+    document.addEventListener('dragover', preventDefaults, true);
+    document.addEventListener('drop', preventDefaults, true);
+
+    return () => {
+      document.removeEventListener('dragover', preventDefaults, true);
+      document.removeEventListener('drop', preventDefaults, true);
+    };
+  }, []);
 
   // 期間選択時の自動読み込みは不要（検索ボタンで実行）
 
@@ -223,6 +262,22 @@ const DealPeriodSearchWindow: React.FC = () => {
     setFilterPartner('');
   };
 
+  const handleExpandAll = () => {
+    // 全ての取引を展開
+    const allDealNOs = new Set<string>();
+    filteredDeals.forEach(deal => {
+      if (deal.hasChildren) {
+        allDealNOs.add(deal.NO);
+      }
+    });
+    setExpandedDeals(allDealNOs);
+  };
+
+  const handleCollapseAll = () => {
+    // 全ての取引を折りたたむ
+    setExpandedDeals(new Set());
+  };
+
   const handleSearch = async () => {
     // 検索ボタンクリック時にAPIを呼び出す
     if (!selectedPeriod) {
@@ -285,11 +340,6 @@ const DealPeriodSearchWindow: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDelete = () => {
-    // 削除処理
-    console.log('削除実行');
   };
 
   const formatAmount = (amount: number): string => {
@@ -385,12 +435,6 @@ const DealPeriodSearchWindow: React.FC = () => {
             >
               検索
             </button>
-            <button
-              onClick={handleDelete}
-              className="px-4 py-2 bg-white border border-gray-300 text-gray-700 rounded hover:bg-gray-100 transition-colors"
-            >
-              削除
-            </button>
           </div>
         </div>
       </div>
@@ -436,10 +480,10 @@ const DealPeriodSearchWindow: React.FC = () => {
                   <React.Fragment key={deal.NO}>
                     {/* 最新版の行 */}
                     <tr
-                      onClick={() => handleRowClick(deal)}
+                      onDoubleClick={() => handleRowClick(deal)}
                       className="hover:bg-blue-50 cursor-pointer transition-colors"
                     >
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-900 ${deal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                         <div className="flex items-center gap-2">
                           {deal.children && deal.children.length > 0 && (
                             <button
@@ -452,16 +496,16 @@ const DealPeriodSearchWindow: React.FC = () => {
                           {deal.DealDate}
                         </div>
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-900 ${deal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                         {deal.DealPartner}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right">
+                      <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-900 text-right ${deal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                         ¥{formatAmount(deal.DealPrice)}
                       </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                      <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-900 ${deal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                         {deal.DealType}
                       </td>
-                      <td className="px-6 py-4 text-sm text-gray-900">
+                      <td className={`px-6 py-4 text-sm text-gray-900 ${deal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                         {deal.DealName}
                       </td>
                     </tr>
@@ -470,24 +514,24 @@ const DealPeriodSearchWindow: React.FC = () => {
                     {expandedDeals.has(deal.NO) && deal.children && deal.children.map((childDeal) => (
                       <tr
                         key={childDeal.NO}
-                        onClick={() => handleRowClick(childDeal)}
+                        onDoubleClick={() => handleRowClick(childDeal)}
                         className="hover:bg-gray-50 cursor-pointer transition-colors bg-gray-50"
                       >
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-600 ${childDeal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                           <div className="flex items-center gap-2 pl-8">
                             ↳ {childDeal.DealDate}
                           </div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-600 ${childDeal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                           {childDeal.DealPartner}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right">
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-right ${childDeal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                           ¥{formatAmount(childDeal.DealPrice)}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-600 ${childDeal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                           {childDeal.DealType}
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-600">
+                        <td className={`px-6 py-4 text-sm text-gray-600 ${childDeal.RecStatus === 'DELETE' ? 'italic' : ''}`}>
                           {childDeal.DealName}
                         </td>
                       </tr>

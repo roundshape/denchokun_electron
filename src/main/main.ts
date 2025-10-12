@@ -183,11 +183,19 @@ function createDealPeriodSearchWindow(periodName: string) {
 
   // ウィンドウをMapに追加
   dealPeriodSearchWindows.set(periodName, newWindow);
+  
+  // メインウィンドウのメニューを先に更新（ウィンドウリストに追加）
+  createMenu();
+  
+  // 期間検索ウィンドウ専用のメニューを設定（後で設定して上書き）
+  createPeriodSearchMenu(newWindow);
 
   // ウィンドウが閉じられたらMapから削除
   newWindow.on('closed', () => {
     dealPeriodSearchWindows.delete(periodName);
     console.log(`Period search window closed: ${periodName}`);
+    // メインウィンドウのメニューを更新
+    createMenu();
   });
 }
 
@@ -233,6 +241,9 @@ function createDealDetailWindow(parentWindow: BrowserWindow, dealData: any) {
 
   // ウィンドウをMapに追加
   dealDetailWindows.set(parentId, detailWindow);
+  
+  // 取引詳細ウィンドウ専用のメニューを設定
+  createDealDetailMenu(detailWindow);
 
   // ウィンドウが閉じられたらMapから削除
   detailWindow.on('closed', () => {
@@ -242,46 +253,33 @@ function createDealDetailWindow(parentWindow: BrowserWindow, dealData: any) {
 }
 
 function createMenu() {
+  // ウィンドウメニューのサブメニューを動的に生成
+  const windowSubmenu: any[] = [];
+  
+  // 開いている期間検索ウィンドウをメニューに追加
+  dealPeriodSearchWindows.forEach((window, periodName) => {
+    if (window && !window.isDestroyed()) {
+      windowSubmenu.push({
+        label: `期間表示: ${periodName}`,
+        click: () => {
+          window.focus();
+        }
+      });
+    }
+  });
+  
+  // ウィンドウがない場合の表示
+  if (windowSubmenu.length === 0) {
+    windowSubmenu.push({
+      label: '開いているウィンドウはありません',
+      enabled: false
+    });
+  }
+  
   const template: any = [
     {
       label: 'ファイル',
       submenu: [
-        {
-          label: '新規取引',
-          accelerator: 'CmdOrCtrl+N',
-          click: () => {
-            mainWindow?.webContents.send('menu-new-transaction');
-          }
-        },
-        {
-          label: 'インポート',
-          accelerator: 'CmdOrCtrl+I',
-          click: () => {
-            mainWindow?.webContents.send('menu-import');
-          }
-        },
-        {
-          label: 'エクスポート',
-          accelerator: 'CmdOrCtrl+E',
-          click: () => {
-            mainWindow?.webContents.send('menu-export');
-          }
-        },
-        { type: 'separator' },
-        {
-          label: '設定',
-          accelerator: 'CmdOrCtrl+,',
-          click: () => {
-            createSetupWindow();
-          }
-        },
-        {
-          label: '環境設定',
-          click: () => {
-            mainWindow?.webContents.send('menu-environment');
-          }
-        },
-        { type: 'separator' },
         {
           label: '終了',
           accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
@@ -301,72 +299,12 @@ function createMenu() {
       ]
     },
     {
-      label: '表示',
-      submenu: [
-        { label: 'リロード', role: 'reload' },
-        { 
-          label: '開発者ツール', 
-          role: 'toggleDevTools',
-          accelerator: 'F12'
-        },
-        { type: 'separator' },
-        { label: 'ズームイン', role: 'zoomIn' },
-        { label: 'ズームアウト', role: 'zoomOut' },
-        { label: 'ズームリセット', role: 'resetZoom' },
-        { type: 'separator' },
-        { label: 'フルスクリーン', role: 'togglefullscreen' }
-      ]
-    },
-    {
-      label: '期間',
-      submenu: [
-        {
-          label: '新規期間作成',
-          click: () => {
-            mainWindow?.webContents.send('menu-new-period');
-          }
-        },
-        {
-          label: '期間管理',
-          click: () => {
-            mainWindow?.webContents.send('menu-manage-periods');
-          }
-        }
-      ]
-    },
-    {
-      label: 'マスター',
-      submenu: [
-        {
-          label: '取引先マスター',
-          click: () => {
-            mainWindow?.webContents.send('menu-partners-master');
-          }
-        },
-        {
-          label: '書類種別マスター',
-          click: () => {
-            mainWindow?.webContents.send('menu-doctype-master');
-          }
-        }
-      ]
+      label: 'ウィンドウ',
+      submenu: windowSubmenu
     },
     {
       label: 'ヘルプ',
       submenu: [
-        {
-          label: 'ドキュメント',
-          click: () => {
-            shell.openExternal('https://www.roundshape.jp/denchokun/docs');
-          }
-        },
-        {
-          label: 'サポート',
-          click: () => {
-            shell.openExternal('https://www.roundshape.jp/support');
-          }
-        },
-        { type: 'separator' },
         {
           label: '電帳君について',
           click: () => {
@@ -379,6 +317,85 @@ function createMenu() {
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
+}
+
+// 期間検索ウィンドウ用のメニュー
+function createPeriodSearchMenu(targetWindow: BrowserWindow) {
+  const template: any = [
+    {
+      label: 'ファイル',
+      submenu: [
+        {
+          label: '閉じる',
+          accelerator: 'Ctrl+W',
+          click: () => {
+            targetWindow.close();
+          }
+        }
+      ]
+    },
+    {
+      label: '編集',
+      submenu: [
+        { label: '元に戻す', role: 'undo' },
+        { label: 'やり直し', role: 'redo' },
+        { type: 'separator' },
+        { label: '切り取り', role: 'cut' },
+        { label: 'コピー', role: 'copy' },
+        { label: '貼り付け', role: 'paste' },
+        { type: 'separator' },
+        {
+          label: '全て展開',
+          accelerator: 'Ctrl+Down',
+          click: () => {
+            targetWindow.webContents.send('menu-expand-all');
+          }
+        },
+        {
+          label: '全て折りたたむ',
+          accelerator: 'Ctrl+Up',
+          click: () => {
+            targetWindow.webContents.send('menu-collapse-all');
+          }
+        }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  targetWindow.setMenu(menu);
+}
+
+// 取引詳細ウィンドウ用のメニュー
+function createDealDetailMenu(targetWindow: BrowserWindow) {
+  const template: any = [
+    {
+      label: 'ファイル',
+      submenu: [
+        {
+          label: '閉じる',
+          accelerator: 'Ctrl+W',
+          click: () => {
+            targetWindow.close();
+          }
+        }
+      ]
+    },
+    {
+      label: '編集',
+      submenu: [
+        { label: '元に戻す', role: 'undo' },
+        { label: 'やり直し', role: 'redo' },
+        { type: 'separator' },
+        { label: '切り取り', role: 'cut' },
+        { label: 'コピー', role: 'copy' },
+        { label: '貼り付け', role: 'paste' }
+      ]
+    }
+  ];
+
+  const menu = Menu.buildFromTemplate(template);
+  targetWindow.setMenu(menu);
 }
 
 // IPC Handlers
@@ -464,6 +481,11 @@ ipcMain.handle('set-store-value', (event, key, value) => {
 
 ipcMain.handle('delete-store-value', (event, key) => {
   store.delete(key);
+  return true;
+});
+
+ipcMain.handle('shell-open-external', async (event, url: string) => {
+  await shell.openExternal(url);
   return true;
 });
 

@@ -31,6 +31,11 @@ const api = {
     delete: (key: string) => ipcRenderer.invoke('delete-store-value', key)
   },
 
+  // Shell operations
+  shell: {
+    openExternal: (url: string) => ipcRenderer.invoke('shell-open-external', url)
+  },
+
   // Database operations (will be implemented)
   db: {
     execute: (query: string, params?: any[]) => ipcRenderer.invoke('db-execute', query, params),
@@ -154,7 +159,9 @@ const api = {
       'menu-partners-master',
       'menu-doctype-master',
       'menu-about',
-      'menu-environment'
+      'menu-environment',
+      'menu-expand-all',
+      'menu-collapse-all'
     ];
 
     events.forEach(event => {
@@ -173,6 +180,8 @@ const api = {
     ipcRenderer.removeAllListeners('menu-doctype-master');
     ipcRenderer.removeAllListeners('menu-about');
     ipcRenderer.removeAllListeners('menu-environment');
+    ipcRenderer.removeAllListeners('menu-expand-all');
+    ipcRenderer.removeAllListeners('menu-collapse-all');
   }
 };
 

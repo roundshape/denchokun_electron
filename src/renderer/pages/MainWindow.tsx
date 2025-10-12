@@ -611,20 +611,60 @@ const MainWindow: React.FC = () => {
   };
 
   const handleSubmit = async () => {
-    if (!dealDate || !amount || !partner || !dealName) {
-      addMessage('入力エラー: 必須項目（取引日、金額、取引先、取引名）を入力してください');
+    // バリデーション（必須項目：取引日、金額、取引先）
+    if (!dealDate || !amount || !partner) {
+      addMessage('入力エラー: 必須項目（取引日、金額、取引先）を入力してください');
       // Electron環境でのみダイアログ表示
       if (typeof window !== 'undefined' && window.electronAPI) {
       await window.electronAPI.showMessageBox({
         type: 'warning',
         title: '入力エラー',
-        message: '必須項目を入力してください。',
+        message: '必須項目（取引日、金額、取引先）を入力してください。',
         buttons: ['OK']
       });
       } else {
         alert('必須項目を入力してください。');
       }
       return;
+    }
+
+    // 取引日が期間の範囲内かチェック
+    const selectedPeriodData = periods.find(p => p.name === selectedPeriod);
+    if (selectedPeriodData) {
+      const fromDate = selectedPeriodData.fromDate;
+      const toDate = selectedPeriodData.toDate;
+      
+      // 開始日チェック（開始日が指定されている場合）
+      if (fromDate && fromDate !== '未設定' && dealDate < fromDate) {
+        addMessage(`取引日は期間の開始日（${fromDate}）以降である必要があります`);
+        if (typeof window !== 'undefined' && window.electronAPI) {
+          await window.electronAPI.showMessageBox({
+            type: 'warning',
+            title: '入力エラー',
+            message: `取引日は期間の開始日（${fromDate}）以降である必要があります。`,
+            buttons: ['OK']
+          });
+        } else {
+          alert(`取引日は期間の開始日（${fromDate}）以降である必要があります。`);
+        }
+        return;
+      }
+      
+      // 終了日チェック（終了日が指定されている場合）
+      if (toDate && toDate !== '未設定' && dealDate > toDate) {
+        addMessage(`取引日は期間の終了日（${toDate}）以前である必要があります`);
+        if (typeof window !== 'undefined' && window.electronAPI) {
+          await window.electronAPI.showMessageBox({
+            type: 'warning',
+            title: '入力エラー',
+            message: `取引日は期間の終了日（${toDate}）以前である必要があります。`,
+            buttons: ['OK']
+          });
+        } else {
+          alert(`取引日は期間の終了日（${toDate}）以前である必要があります。`);
+        }
+        return;
+      }
     }
 
     try {
